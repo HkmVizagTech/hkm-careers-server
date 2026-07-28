@@ -1,6 +1,7 @@
 const { validationResult, body } = require('express-validator');
 const Application = require('../models/Application');
 const Job = require('../models/Job');
+const { getResumeUrl, getResumeKey } = require('../config/r2');
 
 const createValidation = [
   body('job').notEmpty().withMessage('Job is required'),
@@ -77,8 +78,8 @@ const create = async (req, res, next) => {
       email: req.body.email,
       phone: req.body.phone,
       coverLetter: req.body.coverLetter,
-      resumeUrl: req.file.location,
-      resumeKey: req.file.key,
+      resumeUrl: getResumeUrl(req.file),
+      resumeKey: getResumeKey(req.file),
       isExperienced: req.body.isExperienced === 'true',
       yearsOfExperience: req.body.yearsOfExperience ? Number(req.body.yearsOfExperience) : undefined,
       lastEmployer: req.body.lastEmployer || undefined,

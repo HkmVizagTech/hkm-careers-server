@@ -2,13 +2,17 @@ const { S3Client } = require('@aws-sdk/client-s3');
 const multer = require('multer');
 const multerS3 = require('multer-s3');
 const path = require('path');
+const fs = require('fs');
 
 const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID;
 const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID;
 const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY;
 const R2_BUCKET_NAME = process.env.R2_BUCKET_NAME;
+const R2_PUBLIC_URL = process.env.R2_PUBLIC_URL;
 
-const s3Client = R2_ACCOUNT_ID && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY
+const useR2 = !!(R2_ACCOUNT_ID && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY && R2_BUCKET_NAME);
+
+const s3Client = useR2
   ? new S3Client({
       region: 'auto',
       endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
@@ -27,22 +31,34 @@ const ALLOWED_MIME_TYPES = [
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 
+let storage;
+if (useR2) {
+  storage = multerS3({
+    s3: s3Client,
+    bucket: R2_BUCKET_NAME,
+    key: (req, file, cb) => {
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+      const ext = path.extname(file.originalname);
+      cb(null, `resumes/${uniqueSuffix}${ext}`);
+    },
+    contentType: multerS3.AUTO_CONTENT_TYPE,
+  });
+} else {
+  const uploadsDir = path.join(__dirname, '..', '..', 'uploads', 'resumes');
+  fs.mkdirSync(uploadsDir, { recursive: true });
+  storage = multer.diskStorage({
+    destination: (req, file, cb) => cb(null, uploadsDir),
+    filename: (req, file, cb) => {
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+      const ext = path.extname(file.originalname);
+      cb(null, uniqueSuffix + ext);
+    },
+  });
+}
+
 const upload = multer({
-  storage: s3Client && R2_BUCKET_NAME
-    ? multerS3({
-        s3: s3Client,
-        bucket: R2_BUCKET_NAME,
-        key: (req, file, cb) => {
-          const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-          const ext = path.extname(file.originalname);
-          cb(null, `resumes/${uniqueSuffix}${ext}`);
-        },
-        contentType: multerS3.AUTO_CONTENT_TYPE,
-      })
-    : undefined,
-  limits: {
-    fileSize: MAX_FILE_SIZE,
-  },
+  storage,
+  limits: { fileSize: MAX_FILE_SIZE },
   fileFilter: (req, file, cb) => {
     if (ALLOWED_MIME_TYPES.includes(file.mimetype)) {
       cb(null, true);
@@ -52,4 +68,15 @@ const upload = multer({
   },
 });
 
-module.exports = { s3Client, upload };
+function getResumeUrl(file) {
+  if (file.key) {
+    return R2_PUBLIC_URL ? `${R2_PUBLIC_URL}/${file.key}` : file.location || '';
+  }
+  return `/uploads/resumes/${file.filename}`;
+}
+
+function getResumeKey(file) {
+  return file.key || file.filename;
+}
+
+module.exports = { s3Client, upload, getResumeUrl, getResumeKey };

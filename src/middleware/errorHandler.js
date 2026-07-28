@@ -11,6 +11,11 @@ const errorHandler = (err, req, res, next) => {
     return res.status(400).json({ message: err.message });
   }
 
+  // S3/R2 access errors
+  if (err.name === 'AccessDenied' || err.Code === 'AccessDenied') {
+    return res.status(500).json({ message: 'File storage service is temporarily unavailable. Please try again later.' });
+  }
+
   // Mongoose validation error
   if (err.name === 'ValidationError') {
     const messages = Object.values(err.errors).map((e) => e.message);
