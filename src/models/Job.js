@@ -53,6 +53,15 @@ const jobSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
     },
+    askEducationalDetails: {
+      type: Boolean,
+      default: false,
+    },
+    targetGender: {
+      type: String,
+      enum: ['any', 'male', 'female'],
+      default: 'any',
+    },
     applicationCount: {
       type: Number,
       default: 0,

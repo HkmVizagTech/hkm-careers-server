@@ -10,9 +10,11 @@ const {
   updateStatus,
   addNote,
   remove,
+  trackStatus,
 } = require('../controllers/applicationController');
 
-// Public route — application submission with resume upload
+// Public routes
+router.get('/track/:id', trackStatus);  // Public — no auth
 router.post('/', upload.single('resume'), createValidation, create);
 
 // Protected routes

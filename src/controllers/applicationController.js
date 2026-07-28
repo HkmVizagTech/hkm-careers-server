@@ -12,11 +12,16 @@ const createValidation = [
 
 const getAll = async (req, res, next) => {
   try {
-    const { job, status, page = 1, limit = 10 } = req.query;
+    const { job, status, department, page = 1, limit = 10 } = req.query;
     const filter = {};
 
     if (job) filter.job = job;
     if (status) filter.status = status;
+
+    if (department) {
+      const jobIds = await Job.find({ department }).distinct('_id');
+      filter.job = { $in: jobIds };
+    }
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const total = await Application.countDocuments(filter);
@@ -85,6 +90,18 @@ const create = async (req, res, next) => {
       lastEmployer: req.body.lastEmployer || undefined,
       lastEmploymentFrom: req.body.lastEmploymentFrom || undefined,
       lastEmploymentTo: req.body.lastEmploymentTo || undefined,
+      linkedinUrl: req.body.linkedinUrl || undefined,
+      githubUrl: req.body.githubUrl || undefined,
+      portfolioUrl: req.body.portfolioUrl || undefined,
+      location: req.body.location || undefined,
+      gender: req.body.gender || undefined,
+      dateOfBirth: req.body.dateOfBirth || undefined,
+      availableToJoin: req.body.availableToJoin || undefined,
+      currentLocation: req.body.currentLocation || undefined,
+      highestDegree: req.body.highestDegree || undefined,
+      collegeName: req.body.collegeName || undefined,
+      collegeCity: req.body.collegeCity || undefined,
+      studyYears: req.body.studyYears || undefined,
     };
 
     const application = await Application.create(applicationData);
@@ -160,6 +177,26 @@ const addNote = async (req, res, next) => {
   }
 };
 
+const trackStatus = async (req, res, next) => {
+  try {
+    const application = await Application.findById(req.params.id)
+      .populate('job', 'title location type');
+    if (!application) {
+      return res.status(404).json({ message: 'Application not found' });
+    }
+    // Return only safe public fields
+    res.json({
+      name: application.name,
+      email: application.email.replace(/(.{2}).*(@.*)/, '$1***$2'),
+      job: typeof application.job === 'object' ? { title: application.job.title, location: application.job.location, type: application.job.type } : null,
+      status: application.status,
+      appliedAt: application.createdAt,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 const remove = async (req, res, next) => {
   try {
     const application = await Application.findByIdAndDelete(req.params.id);
@@ -184,4 +221,5 @@ module.exports = {
   updateStatus,
   addNote,
   remove,
+  trackStatus,
 };

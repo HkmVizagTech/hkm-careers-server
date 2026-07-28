@@ -55,6 +55,53 @@ const applicationSchema = new mongoose.Schema(
       enum: ['received', 'under-review', 'shortlisted', 'interview', 'selected', 'rejected'],
       default: 'received',
     },
+    linkedinUrl: {
+      type: String,
+      trim: true,
+    },
+    githubUrl: {
+      type: String,
+      trim: true,
+    },
+    portfolioUrl: {
+      type: String,
+      trim: true,
+    },
+    location: {
+      type: String,
+      trim: true,
+    },
+    gender: {
+      type: String,
+      enum: ['male', 'female', 'other', 'prefer-not-to-say'],
+    },
+    dateOfBirth: {
+      type: Date,
+    },
+    availableToJoin: {
+      type: String,
+      trim: true,
+    },
+    currentLocation: {
+      type: String,
+      trim: true,
+    },
+    highestDegree: {
+      type: String,
+      trim: true,
+    },
+    collegeName: {
+      type: String,
+      trim: true,
+    },
+    collegeCity: {
+      type: String,
+      trim: true,
+    },
+    studyYears: {
+      type: String,
+      trim: true,
+    },
     notes: [
       {
         text: { type: String, required: true },
