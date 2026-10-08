@@ -13,6 +13,8 @@ const applicationRoutes = require('./routes/applications');
 const dashboardRoutes = require('./routes/dashboard');
 const userRoutes = require('./routes/users');
 const webhookRoutes = require('./routes/webhooks');
+const notificationRoutes = require('./routes/notifications');
+const { startReminderScheduler } = require('./utils/adminAlerts');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -65,10 +67,13 @@ app.use('/api/applications', applicationRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/webhooks', webhookRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 // Error handler (must be after routes)
 app.use(errorHandler);
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  // Admin reminders (unreviewed applications, interviews, job deadlines, follow-ups).
+  if (process.env.DISABLE_REMINDERS !== 'true') startReminderScheduler();
 });

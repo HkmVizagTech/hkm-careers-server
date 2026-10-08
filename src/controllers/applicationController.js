@@ -1,9 +1,38 @@
 const { validationResult, body } = require('express-validator');
 const Application = require('../models/Application');
 const Job = require('../models/Job');
+const Notification = require('../models/Notification');
 const { generateApplicationNumber } = require('../utils/applicationNumber');
 const { getResumeUrl, getResumeKey } = require('../config/r2');
 const { notifyApplicationReceived, notifyStatusChange } = require('../utils/notifications');
+const { alertNewApplication } = require('../utils/adminAlerts');
+const { formatIST } = require('../utils/dates');
+
+const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Shared list/export filter: job, status, department, search (name, email, phone, application number). */
+async function buildFilter(query) {
+  const { job, status, department, search } = query;
+  const filter = {};
+  if (job) filter.job = job;
+  if (status) filter.status = status;
+
+  if (department) {
+    const jobIds = await Job.find({ department }).distinct('_id');
+    filter.job = job ? { $in: jobIds.filter((id) => String(id) === String(job)) } : { $in: jobIds };
+  }
+
+  const term = String(search || '').trim().slice(0, 100);
+  if (term) {
+    const rx = new RegExp(escapeRegex(term), 'i');
+    const or = [{ name: rx }, { email: rx }, { applicationNumber: rx }];
+    const digits = term.replace(/\D/g, '');
+    // Phone numbers are stored as typed ("98765 43210"), so match the digits with anything in between.
+    if (digits.length >= 4) or.push({ phone: new RegExp(digits.split('').join('\\D*')) });
+    filter.$or = or;
+  }
+  return filter;
+}
 
 const createValidation = [
   body('job').notEmpty().withMessage('Job is required'),
@@ -14,16 +43,8 @@ const createValidation = [
 
 const getAll = async (req, res, next) => {
   try {
-    const { job, status, department, page = 1, limit = 10 } = req.query;
-    const filter = {};
-
-    if (job) filter.job = job;
-    if (status) filter.status = status;
-
-    if (department) {
-      const jobIds = await Job.find({ department }).distinct('_id');
-      filter.job = { $in: jobIds };
-    }
+    const { page = 1, limit = 10 } = req.query;
+    const filter = await buildFilter(req.query);
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const total = await Application.countDocuments(filter);
@@ -51,7 +72,8 @@ const getById = async (req, res, next) => {
   try {
     const application = await Application.findById(req.params.id)
       .populate('job')
-      .populate('notes.addedBy', 'name email');
+      .populate('notes.addedBy', 'name email')
+      .populate('followUps.createdBy', 'name');
 
     if (!application) {
       return res.status(404).json({ message: 'Application not found' });
@@ -71,7 +93,7 @@ const create = async (req, res, next) => {
     }
 
     const job = await Job.findById(req.body.job);
-    if (!job || job.status !== 'active') {
+    if (!job || job.status !== 'active' || (job.deadline && job.deadline <= new Date())) {
       return res.status(400).json({ message: 'Job is not accepting applications' });
     }
 
@@ -117,6 +139,8 @@ const create = async (req, res, next) => {
     notifyApplicationReceived(application, job).catch((err) =>
       console.error('[applications] received notification failed:', err.message)
     );
+    // Bell alert for the admin team.
+    alertNewApplication(application, job);
 
     res.status(201).json({
       message: 'Application submitted successfully',
@@ -212,6 +236,167 @@ const resendNotification = async (req, res, next) => {
   }
 };
 
+// ---------------------------------------------------------------- CSV export
+
+const CSV_COLUMNS = [
+  ['Application No', (a) => a.applicationNumber || String(a._id)],
+  ['Name', (a) => a.name],
+  ['Email', (a) => a.email],
+  ['Phone', (a) => a.phone],
+  ['Job', (a) => a.job?.title],
+  ['Status', (a) => a.status],
+  ['Applied On', (a) => formatIST(a.createdAt)],
+  ['Location', (a) => a.location],
+  ['Current Location', (a) => a.currentLocation],
+  ['Gender', (a) => a.gender],
+  ['Date of Birth', (a) => (a.dateOfBirth ? new Date(a.dateOfBirth).toISOString().slice(0, 10) : '')],
+  ['Experienced', (a) => (a.isExperienced ? 'Yes' : 'No')],
+  ['Years of Experience', (a) => a.yearsOfExperience],
+  ['Last Employer', (a) => a.lastEmployer],
+  ['Available to Join', (a) => a.availableToJoin],
+  ['Highest Degree', (a) => a.highestDegree],
+  ['College', (a) => a.collegeName],
+  ['College City', (a) => a.collegeCity],
+  ['Study Years', (a) => a.studyYears],
+  ['LinkedIn', (a) => a.linkedinUrl],
+  ['GitHub', (a) => a.githubUrl],
+  ['Portfolio', (a) => a.portfolioUrl],
+  ['Interview', (a) => (a.interview?.scheduledAt ? formatIST(a.interview.scheduledAt) : '')],
+  ['Resume', (a) => a.resumeUrl],
+];
+
+function csvCell(value) {
+  if (value === null || value === undefined) return '';
+  let s = String(value);
+  // Stop spreadsheet apps from treating candidate input as a formula.
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+// GET /api/applications/export?status&job&department&search -> CSV (opens in Excel)
+const exportCsv = async (req, res, next) => {
+  try {
+    const filter = await buildFilter(req.query);
+    const apps = await Application.find(filter)
+      .select('-whatsappMessages -notes -followUps')
+      .populate('job', 'title')
+      .sort({ createdAt: -1 })
+      .limit(10000)
+      .lean();
+
+    const lines = [CSV_COLUMNS.map(([h]) => csvCell(h)).join(',')];
+    for (const a of apps) lines.push(CSV_COLUMNS.map(([, get]) => csvCell(get(a))).join(','));
+
+    const stamp = new Date().toISOString().slice(0, 10);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="applications-${stamp}.csv"`);
+    res.send('﻿' + lines.join('\r\n')); // BOM so Excel reads Telugu/Hindi names correctly
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ---------------------------------------------------------------- interview
+
+// PUT /api/applications/:id/interview { scheduledAt, mode, location, notes }
+const scheduleInterview = async (req, res, next) => {
+  try {
+    const { scheduledAt, mode, location, notes } = req.body || {};
+    const at = new Date(scheduledAt);
+    if (!scheduledAt || Number.isNaN(at.getTime())) {
+      return res.status(400).json({ message: 'Please choose a valid interview date and time' });
+    }
+    if (mode && !['in-person', 'phone', 'video'].includes(mode)) {
+      return res.status(400).json({ message: 'Invalid interview mode' });
+    }
+    const application = await Application.findByIdAndUpdate(
+      req.params.id,
+      {
+        $set: {
+          interview: {
+            scheduledAt: at,
+            mode: mode || undefined,
+            location: location ? String(location).trim().slice(0, 300) : undefined,
+            notes: notes ? String(notes).trim().slice(0, 1000) : undefined,
+            scheduledBy: req.user._id,
+          },
+        },
+      },
+      { new: true, runValidators: true }
+    ).select('interview');
+    if (!application) return res.status(404).json({ message: 'Application not found' });
+    // Reminders for the old time are no longer true; the checks create fresh ones for the new time.
+    await Notification.deleteMany({ application: application._id, type: 'interview' });
+    res.json({ interview: application.interview });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// DELETE /api/applications/:id/interview
+const clearInterview = async (req, res, next) => {
+  try {
+    const application = await Application.findByIdAndUpdate(req.params.id, { $unset: { interview: 1 } }, { new: true });
+    if (!application) return res.status(404).json({ message: 'Application not found' });
+    await Notification.deleteMany({ application: application._id, type: 'interview' });
+    res.json({ interview: null });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ---------------------------------------------------------------- follow-up reminders
+
+const followUpsOf = async (id) =>
+  (await Application.findById(id).select('followUps').populate('followUps.createdBy', 'name'))?.followUps;
+
+// POST /api/applications/:id/follow-ups { dueAt, note }
+const addFollowUp = async (req, res, next) => {
+  try {
+    const { dueAt, note } = req.body || {};
+    const at = new Date(dueAt);
+    if (!dueAt || Number.isNaN(at.getTime())) return res.status(400).json({ message: 'Please choose when to be reminded' });
+    if (!note || !String(note).trim()) return res.status(400).json({ message: 'Please add what to follow up on' });
+    const updated = await Application.findByIdAndUpdate(req.params.id, {
+      $push: { followUps: { dueAt: at, note: String(note).trim().slice(0, 500), createdBy: req.user._id } },
+    });
+    if (!updated) return res.status(404).json({ message: 'Application not found' });
+    res.status(201).json({ followUps: await followUpsOf(req.params.id) });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// PATCH /api/applications/:id/follow-ups/:fid { done }
+const updateFollowUp = async (req, res, next) => {
+  try {
+    const set = {};
+    if (typeof req.body?.done === 'boolean') set['followUps.$.done'] = req.body.done;
+    if (req.body?.dueAt) {
+      const at = new Date(req.body.dueAt);
+      if (Number.isNaN(at.getTime())) return res.status(400).json({ message: 'Invalid date' });
+      set['followUps.$.dueAt'] = at;
+      set['followUps.$.notifiedAt'] = null; // remind again at the new time
+    }
+    const result = await Application.updateOne({ _id: req.params.id, 'followUps._id': req.params.fid }, { $set: set });
+    if (!result.matchedCount) return res.status(404).json({ message: 'Reminder not found' });
+    res.json({ followUps: await followUpsOf(req.params.id) });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// DELETE /api/applications/:id/follow-ups/:fid
+const deleteFollowUp = async (req, res, next) => {
+  try {
+    const result = await Application.updateOne({ _id: req.params.id }, { $pull: { followUps: { _id: req.params.fid } } });
+    if (!result.matchedCount) return res.status(404).json({ message: 'Application not found' });
+    res.json({ followUps: await followUpsOf(req.params.id) });
+  } catch (error) {
+    next(error);
+  }
+};
+
 const trackStatus = async (req, res, next) => {
   try {
     // Accepts the short number (FSD10001, any case) or, for older applications, the long id.
@@ -246,6 +431,8 @@ const remove = async (req, res, next) => {
 
     // Decrement application count on job
     await Job.findByIdAndUpdate(application.job, { $inc: { applicationCount: -1 } });
+    // Its bell alerts would only lead to a "not found" page now.
+    await Notification.deleteMany({ application: application._id });
 
     res.json({ message: 'Application deleted successfully' });
   } catch (error) {
@@ -263,4 +450,10 @@ module.exports = {
   addNote,
   remove,
   trackStatus,
+  exportCsv,
+  scheduleInterview,
+  clearInterview,
+  addFollowUp,
+  updateFollowUp,
+  deleteFollowUp,
 };

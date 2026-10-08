@@ -62,6 +62,10 @@ const jobSchema = new mongoose.Schema(
       enum: ['any', 'male', 'female'],
       default: 'any',
     },
+    // Last day to apply. Stored as the end of that day (India time); the job closes itself after it passes.
+    deadline: {
+      type: Date,
+    },
     applicationCount: {
       type: Number,
       default: 0,

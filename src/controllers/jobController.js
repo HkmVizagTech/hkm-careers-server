@@ -1,5 +1,16 @@
 const { validationResult, body } = require('express-validator');
 const Job = require('../models/Job');
+const Notification = require('../models/Notification');
+const { endOfDayIST } = require('../utils/dates');
+
+/** Accept "YYYY-MM-DD" from the date picker (means end of that day, India time); "" clears it. */
+function normalizeDeadline(body) {
+  if (!('deadline' in body)) return null;
+  const d = endOfDayIST(body.deadline);
+  if (d === undefined) return 'Invalid application deadline';
+  body.deadline = d; // Date or null
+  return null;
+}
 
 const createValidation = [
   body('title').notEmpty().withMessage('Job title is required').trim(),
@@ -19,6 +30,8 @@ const getAll = async (req, res, next) => {
     // For public routes, only show active jobs
     if (!req.user) {
       filter.status = 'active';
+      // Hide jobs whose deadline passed even before the reminder job gets to close them.
+      filter.$or = [{ deadline: null }, { deadline: { $gt: new Date() } }];
     } else if (status) {
       filter.status = status;
     }
@@ -81,6 +94,8 @@ const create = async (req, res, next) => {
       return res.status(400).json({ message: errors.array()[0].msg });
     }
 
+    const deadlineError = normalizeDeadline(req.body);
+    if (deadlineError) return res.status(400).json({ message: deadlineError });
     req.body.postedBy = req.user._id;
     const job = await Job.create(req.body);
     await job.populate('department', 'name');
@@ -92,6 +107,8 @@ const create = async (req, res, next) => {
 
 const update = async (req, res, next) => {
   try {
+    const deadlineError = normalizeDeadline(req.body);
+    if (deadlineError) return res.status(400).json({ message: deadlineError });
     const job = await Job.findByIdAndUpdate(req.params.id, req.body, {
       new: true,
       runValidators: true,
@@ -113,6 +130,7 @@ const remove = async (req, res, next) => {
     if (!job) {
       return res.status(404).json({ message: 'Job not found' });
     }
+    await Notification.deleteMany({ job: job._id, application: null });
     res.json({ message: 'Job deleted successfully' });
   } catch (error) {
     next(error);

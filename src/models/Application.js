@@ -124,6 +124,25 @@ const applicationSchema = new mongoose.Schema(
       trim: true,
     },
     whatsappMessages: [whatsappMessageSchema],
+    // Interview the admin team has scheduled (admins get reminders the day before and shortly before).
+    interview: {
+      scheduledAt: { type: Date, index: true },
+      mode: { type: String, enum: ['in-person', 'phone', 'video'] },
+      location: { type: String, trim: true }, // venue or meeting link
+      notes: { type: String, trim: true },
+      scheduledBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    },
+    // "Remind me on <date>" items set by admins.
+    followUps: [
+      {
+        dueAt: { type: Date, required: true },
+        note: { type: String, trim: true, required: true },
+        done: { type: Boolean, default: false },
+        notifiedAt: { type: Date },
+        createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        createdAt: { type: Date, default: Date.now },
+      },
+    ],
     notes: [
       {
         text: { type: String, required: true },
@@ -134,5 +153,8 @@ const applicationSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+applicationSchema.index({ status: 1, createdAt: 1 });
+applicationSchema.index({ 'followUps.dueAt': 1, 'followUps.done': 1 });
 
 module.exports = mongoose.model('Application', applicationSchema);
