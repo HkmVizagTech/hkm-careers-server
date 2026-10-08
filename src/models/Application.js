@@ -1,5 +1,24 @@
 const mongoose = require('mongoose');
 
+const whatsappMessageSchema = new mongoose.Schema(
+  {
+    kind: { type: String, enum: ['received', 'status'], required: true },
+    applicationStatus: { type: String },
+    templateId: { type: String },
+    to: { type: String, index: true },
+    messageId: { type: String, index: true },
+    // submitted -> sent -> delivered -> read, or failed / skipped
+    status: {
+      type: String,
+      enum: ['submitted', 'sent', 'delivered', 'read', 'failed', 'skipped'],
+      default: 'submitted',
+    },
+    error: { type: String },
+    createdAt: { type: Date, default: Date.now },
+    updatedAt: { type: Date, default: Date.now },
+  }
+);
+
 const applicationSchema = new mongoose.Schema(
   {
     job: {
@@ -102,6 +121,7 @@ const applicationSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
+    whatsappMessages: [whatsappMessageSchema],
     notes: [
       {
         text: { type: String, required: true },

@@ -2,6 +2,7 @@ const { validationResult, body } = require('express-validator');
 const Application = require('../models/Application');
 const Job = require('../models/Job');
 const { getResumeUrl, getResumeKey } = require('../config/r2');
+const { notifyApplicationReceived, notifyStatusChange } = require('../utils/notifications');
 
 const createValidation = [
   body('job').notEmpty().withMessage('Job is required'),
@@ -26,6 +27,7 @@ const getAll = async (req, res, next) => {
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const total = await Application.countDocuments(filter);
     const applications = await Application.find(filter)
+      .select('-whatsappMessages')
       .populate('job', 'title')
       .sort({ createdAt: -1 })
       .skip(skip)
@@ -109,6 +111,11 @@ const create = async (req, res, next) => {
     // Increment application count on job
     await Job.findByIdAndUpdate(req.body.job, { $inc: { applicationCount: 1 } });
 
+    // WhatsApp confirmation — fire and forget so a Gupshup hiccup never delays or fails the submission.
+    notifyApplicationReceived(application, job).catch((err) =>
+      console.error('[applications] received notification failed:', err.message)
+    );
+
     res.status(201).json({
       message: 'Application submitted successfully',
       application: {
@@ -131,17 +138,24 @@ const updateStatus = async (req, res, next) => {
       return res.status(400).json({ message: 'Invalid status' });
     }
 
+    const previous = await Application.findById(req.params.id).select('status');
+    if (!previous) {
+      return res.status(404).json({ message: 'Application not found' });
+    }
+
     const application = await Application.findByIdAndUpdate(
       req.params.id,
       { status },
       { new: true }
     ).populate('job', 'title');
 
-    if (!application) {
-      return res.status(404).json({ message: 'Application not found' });
+    // `notify: false` lets HR change the status silently. Unchanged status never re-sends.
+    let notification = null;
+    if (req.body.notify !== false && previous.status !== status) {
+      notification = await notifyStatusChange(application, application.job, status);
     }
 
-    res.json(application);
+    res.json({ ...application.toObject(), notification });
   } catch (error) {
     next(error);
   }
@@ -172,6 +186,24 @@ const addNote = async (req, res, next) => {
     }
 
     res.json(application);
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Re-send the WhatsApp message that matches the application's current status.
+const resendNotification = async (req, res, next) => {
+  try {
+    const application = await Application.findById(req.params.id).populate('job', 'title');
+    if (!application) {
+      return res.status(404).json({ message: 'Application not found' });
+    }
+
+    const notification = await notifyStatusChange(application, application.job, application.status, {
+      force: true,
+    });
+    const fresh = await Application.findById(req.params.id).select('whatsappMessages');
+    res.json({ notification, whatsappMessages: fresh.whatsappMessages });
   } catch (error) {
     next(error);
   }
@@ -219,6 +251,7 @@ module.exports = {
   create,
   createValidation,
   updateStatus,
+  resendNotification,
   addNote,
   remove,
   trackStatus,

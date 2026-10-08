@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
-    "seed": "node src/utils/seedAdmin.js"
+    "seed": "node src/utils/seedAdmin.js",
+    "test": "node --test"
   },
   "keywords": [],
   "author": "",

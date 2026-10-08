@@ -8,6 +8,7 @@ const {
   create,
   createValidation,
   updateStatus,
+  resendNotification,
   addNote,
   remove,
   trackStatus,
@@ -22,6 +23,7 @@ router.get('/', auth, getAll);
 router.get('/:id', auth, getById);
 router.patch('/:id/status', auth, updateStatus);
 router.post('/:id/notes', auth, addNote);
+router.post('/:id/notify', auth, resendNotification);
 router.delete('/:id', auth, remove);
 
 module.exports = router;
