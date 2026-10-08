@@ -59,10 +59,11 @@ const maskPhone = (p) => (p ? `***${String(p).slice(-4)}` : 'n/a');
 
 /**
  * Send an approved template message.
- * @param {{ to: string, templateId: string, params: (string|number)[] }} opts
+ * @param {{ to: string, templateId: string, params: (string|number)[], buttonParam?: string }} opts
+ * `buttonParam` fills the {{1}} of a dynamic URL button (the part after the fixed URL prefix).
  * @returns {Promise<{ ok: boolean, messageId?: string, error?: string }>}
  */
-async function sendTemplate({ to, templateId, params = [] }) {
+async function sendTemplate({ to, templateId, params = [], buttonParam }) {
   if (!isConfigured()) return { ok: false, error: 'Gupshup is not configured' };
   if (!to) return { ok: false, error: 'Missing destination number' };
   if (!templateId) return { ok: false, error: 'Missing template id' };
@@ -74,6 +75,11 @@ async function sendTemplate({ to, templateId, params = [] }) {
     'src.name': process.env.GUPSHUP_APP_NAME,
     template: JSON.stringify({ id: templateId, params: params.map((p) => cleanParam(p)) }),
   });
+
+  // Dynamic "Visit website" button: Gupshup takes its variable in the `message` field.
+  if (buttonParam) {
+    body.set('message', JSON.stringify({ buttons: [{ type: 'url', index: 0, parameter: String(buttonParam) }] }));
+  }
 
   const controller = new AbortController();
   const timer = setTimeout(

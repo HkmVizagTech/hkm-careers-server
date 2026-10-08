@@ -1,6 +1,7 @@
 const { validationResult, body } = require('express-validator');
 const Application = require('../models/Application');
 const Job = require('../models/Job');
+const { generateApplicationNumber } = require('../utils/applicationNumber');
 const { getResumeUrl, getResumeKey } = require('../config/r2');
 const { notifyApplicationReceived, notifyStatusChange } = require('../utils/notifications');
 
@@ -106,6 +107,7 @@ const create = async (req, res, next) => {
       studyYears: req.body.studyYears || undefined,
     };
 
+    applicationData.applicationNumber = await generateApplicationNumber(job.title);
     const application = await Application.create(applicationData);
 
     // Increment application count on job
@@ -119,7 +121,8 @@ const create = async (req, res, next) => {
     res.status(201).json({
       message: 'Application submitted successfully',
       application: {
-        id: application._id,
+        id: application.applicationNumber,
+        _id: application._id,
         name: application.name,
         email: application.email,
       },
@@ -211,16 +214,21 @@ const resendNotification = async (req, res, next) => {
 
 const trackStatus = async (req, res, next) => {
   try {
-    const application = await Application.findById(req.params.id)
-      .populate('job', 'title location type');
+    // Accepts the short number (FSD10001, any case) or, for older applications, the long id.
+    const key = String(req.params.id || '').trim();
+    const application = await Application.findOne(
+      /^[a-f0-9]{24}$/i.test(key) ? { _id: key } : { applicationNumber: key.toUpperCase() }
+    ).populate('job', 'title location type');
     if (!application) {
       return res.status(404).json({ message: 'Application not found' });
     }
     // Return only safe public fields
     res.json({
-      name: application.name,
+      // Short ids are guessable, so the public view never shows the full name.
+      name: application.name.trim().split(/\s+/).map((w, i) => (i === 0 ? w : w[0] + '.')).join(' '),
+      applicationNumber: application.applicationNumber || String(application._id),
       email: application.email.replace(/(.{2}).*(@.*)/, '$1***$2'),
-      job: typeof application.job === 'object' ? { title: application.job.title, location: application.job.location, type: application.job.type } : null,
+      job: application.job && typeof application.job === 'object' ? { title: application.job.title, location: application.job.location, type: application.job.type } : null,
       status: application.status,
       appliedAt: application.createdAt,
     });

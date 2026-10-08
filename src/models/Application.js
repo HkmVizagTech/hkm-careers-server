@@ -21,6 +21,8 @@ const whatsappMessageSchema = new mongoose.Schema(
 
 const applicationSchema = new mongoose.Schema(
   {
+    // Short, human-friendly id shown to applicants (e.g. FSD10001). The Mongo _id stays the internal key.
+    applicationNumber: { type: String, unique: true, sparse: true, uppercase: true, trim: true },
     job: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Job',

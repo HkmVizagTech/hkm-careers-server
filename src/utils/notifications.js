@@ -13,9 +13,15 @@
  *    button param: application id
  *
  * 2) GUPSHUP_TPL_STATUS_UPDATE — name suggestion: careers_application_status_update
- *    Hello {{1}}, there is an update on your application for {{2}} at Hare Krishna Movement Vizag.
- *    Status: {{3}}. {{4}} Track your application at {{5}}.
- *    params: [candidate name, job title, status label, status message, track link]
+ *    Hare Krishna {{1}} 🙏
+ *    There is an update on your application for the position of {{2}}.
+ *    Application Status: {{3}}
+ *    {{4}}
+ *    You can track your application status using the button below.
+ *    Thank you for your interest in serving with Hare Krishna Movement.
+ *    [Button: Visit website, dynamic URL  https://careers.harekrishnavizag.org/track?id={{1}}]
+ *    body params: [candidate name, job title, status label, status message]
+ *    button param: application id
  *
  * Every send is recorded on the application (`whatsappMessages`) and updated later by the
  * Gupshup webhook (sent / delivered / read / failed).
@@ -31,24 +37,24 @@ const STATUS_COPY = {
   },
   'under-review': {
     label: 'Under Review',
-    message: 'Our team has started reviewing your application.',
+    message: 'Our HR team has started reviewing your application. HR will get back to you with further details.',
   },
   shortlisted: {
     label: 'Shortlisted',
-    message: 'Congratulations, you have been shortlisted. We will contact you shortly with the next steps.',
+    message: 'Congratulations, you have been shortlisted. HR will get back to you with further details.',
   },
   interview: {
     label: 'Interview',
-    message: 'You have been selected for an interview. Our team will contact you with the schedule.',
+    message: 'You have been selected for an interview. HR will get back to you with further details.',
   },
   selected: {
     label: 'Selected',
-    message: 'Congratulations, you have been selected. Our team will reach out with the joining details.',
+    message: 'Congratulations, you have been selected to serve with us. HR will get back to you with further details.',
   },
   rejected: {
     label: 'Not Selected',
     message:
-      'Thank you for your interest. We are unable to take your application forward at this time, and we encourage you to apply for other openings.',
+      'Thank you for your interest. We are unable to take your application forward at this time. We encourage you to apply for other openings.',
   },
 };
 
@@ -114,19 +120,11 @@ async function dispatch(application, job, kind, applicationStatus) {
       const copy = STATUS_COPY[applicationStatus] || { label: applicationStatus, message: '' };
       const name = application.name;
       const title = job?.title || 'the position';
-      const link = trackUrl(application._id);
-      const id = String(application._id);
-      const params =
-        kind === 'received'
-          ? [name, title, id]
-          : [name, title, copy.label, copy.message, link];
+      const id = application.applicationNumber || String(application._id);
+      // Both templates share the same shape: body variables + a dynamic "track" button.
+      const params = kind === 'received' ? [name, title, id] : [name, title, copy.label, copy.message];
 
-      const result = await sendTemplate({
-        to,
-        templateId,
-        params,
-        buttonParam: kind === 'received' ? id : undefined,
-      });
+      const result = await sendTemplate({ to, templateId, params, buttonParam: id });
       if (result.ok) {
         entry.messageId = result.messageId;
       } else {
