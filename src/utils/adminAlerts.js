@@ -62,6 +62,18 @@ async function alertNewApplication(application, job) {
   });
 }
 
+/** All openings for a job are filled: the job was closed automatically. */
+async function alertPositionFilled(job, selected, remaining) {
+  return createAlert({
+    type: 'position-filled',
+    title: `Position filled: ${job.title}`,
+    message: `${selected} selected, so the job was closed.${remaining ? ` ${remaining} applicant${remaining === 1 ? ' is' : 's are'} still in progress.` : ''}`,
+    link: `/admin/applications?job=${job._id}`,
+    job: job._id,
+    dedupeKey: `position-filled:${job._id}:${selected}`,
+  });
+}
+
 // ---------------------------------------------------------------- reminder checks
 
 async function checkUnreviewed(now) {
@@ -220,6 +232,7 @@ function startReminderScheduler() {
 module.exports = {
   createAlert,
   alertNewApplication,
+  alertPositionFilled,
   runReminderChecks,
   runChecksIfStale,
   startReminderScheduler,

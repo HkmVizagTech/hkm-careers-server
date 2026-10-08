@@ -1,6 +1,10 @@
 const { validationResult, body } = require('express-validator');
 const Job = require('../models/Job');
 const Notification = require('../models/Notification');
+const Application = require('../models/Application');
+const { notifyStatusChange } = require('../utils/notifications');
+
+const OPEN_STATUSES = ['received', 'under-review', 'shortlisted', 'interview'];
 const { endOfDayIST } = require('../utils/dates');
 
 /** Accept "YYYY-MM-DD" from the date picker (means end of that day, India time); "" clears it. */
@@ -96,6 +100,10 @@ const create = async (req, res, next) => {
 
     const deadlineError = normalizeDeadline(req.body);
     if (deadlineError) return res.status(400).json({ message: deadlineError });
+    if ('openings' in req.body) {
+      const n = parseInt(req.body.openings, 10);
+      req.body.openings = Number.isFinite(n) && n >= 1 ? Math.min(n, 500) : 1;
+    }
     req.body.postedBy = req.user._id;
     const job = await Job.create(req.body);
     await job.populate('department', 'name');
@@ -107,6 +115,10 @@ const create = async (req, res, next) => {
 
 const update = async (req, res, next) => {
   try {
+    if ('openings' in req.body) {
+      const n = parseInt(req.body.openings, 10);
+      req.body.openings = Number.isFinite(n) && n >= 1 ? Math.min(n, 500) : 1;
+    }
     const deadlineError = normalizeDeadline(req.body);
     if (deadlineError) return res.status(400).json({ message: deadlineError });
     const job = await Job.findByIdAndUpdate(req.params.id, req.body, {
@@ -137,4 +149,54 @@ const remove = async (req, res, next) => {
   }
 };
 
-module.exports = { getAll, getBySlug, getById, create, createValidation, update, remove };
+// GET /api/jobs/:id/pipeline -> { openings, selected, remaining, status }
+const pipeline = async (req, res, next) => {
+  try {
+    const job = await Job.findById(req.params.id).select('title status openings');
+    if (!job) return res.status(404).json({ message: 'Job not found' });
+    const [selected, remaining] = await Promise.all([
+      Application.countDocuments({ job: job._id, status: 'selected' }),
+      Application.countDocuments({ job: job._id, status: { $in: OPEN_STATUSES } }),
+    ]);
+    res.json({ jobId: job._id, title: job.title, status: job.status, openings: job.openings || 1, selected, remaining });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * POST /api/jobs/:id/close-remaining { notify }
+ * Closes the job and moves every applicant still in progress to "Not Selected".
+ * With notify, each gets the Not Selected WhatsApp (sent in the background).
+ */
+const closeRemaining = async (req, res, next) => {
+  try {
+    const job = await Job.findById(req.params.id).select('title status');
+    if (!job) return res.status(404).json({ message: 'Job not found' });
+    if (job.status === 'active') await Job.updateOne({ _id: job._id }, { $set: { status: 'closed' } });
+
+    const apps = await Application.find({ job: job._id, status: { $in: OPEN_STATUSES } }).select('name phone applicationNumber status');
+    const ids = apps.map((a) => a._id);
+    await Application.updateMany({ _id: { $in: ids }, status: { $in: OPEN_STATUSES } }, { $set: { status: 'rejected' } });
+
+    const notify = req.body?.notify === true;
+    res.json({ updated: ids.length, notified: notify ? ids.length : 0, jobClosed: true });
+
+    if (notify && apps.length) {
+      // One at a time so Gupshup isn't flooded; failures are logged on each application.
+      (async () => {
+        for (const a of apps) {
+          a.status = 'rejected';
+          await notifyStatusChange(a, job, 'rejected').catch((err) =>
+            console.error('[jobs] close-remaining notify failed:', err.message)
+          );
+          await new Promise((r) => setTimeout(r, 300));
+        }
+      })();
+    }
+  } catch (error) {
+    next(error);
+  }
+};
+
+module.exports = { getAll, getBySlug, getById, create, createValidation, update, remove, pipeline, closeRemaining };

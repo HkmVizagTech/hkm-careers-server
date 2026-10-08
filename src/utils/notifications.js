@@ -23,12 +23,26 @@
  *    body params: [candidate name, job title, status label, status message]
  *    button param: application id
  *
+ * 3) GUPSHUP_TPL_INTERVIEW — name suggestion: job_interview_scheduled
+ *    Hare Krishna {{1}} 🙏
+ *    Your interview for the position of {{2}} has been scheduled.
+ *    Date & Time: {{3}}
+ *    Mode: {{4}}
+ *    Venue / Link: {{5}}
+ *    Please be available on time. If you have any questions, HR will be happy to help.
+ *    Thank you for your interest in serving with Hare Krishna Movement.
+ *    [Button: Visit website, dynamic URL  https://careers.harekrishnavizag.org/track?id={{1}}]
+ *    body params: [candidate name, job title, date & time, mode, venue or link]
+ *
  * Every send is recorded on the application (`whatsappMessages`) and updated later by the
  * Gupshup webhook (sent / delivered / read / failed).
  */
 
 const Application = require('../models/Application');
 const { isConfigured, normalizePhone, sendTemplate, maskPhone } = require('./gupshup');
+const { formatIST } = require('./dates');
+
+const MODE_LABEL = { 'in-person': 'In person', phone: 'Phone call', video: 'Video call' };
 
 const STATUS_COPY = {
   received: {
@@ -73,7 +87,9 @@ function trackUrl(applicationId) {
   return base ? `${base}/track?id=${applicationId}` : String(applicationId);
 }
 
-const MAX_MESSAGES_PER_NUMBER_PER_DAY = Number(process.env.WHATSAPP_MAX_PER_NUMBER_PER_DAY) || 8;
+// Guards one number against spam through the public form. Only messages that actually
+// went out count (failed / skipped attempts don't use up the allowance).
+const MAX_MESSAGES_PER_NUMBER_PER_DAY = Number(process.env.WHATSAPP_MAX_PER_NUMBER_PER_DAY) || 20;
 
 async function sentTodayTo(to) {
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
@@ -84,7 +100,7 @@ async function sentTodayTo(to) {
       $match: {
         'whatsappMessages.to': to,
         'whatsappMessages.createdAt': { $gte: since },
-        'whatsappMessages.status': { $ne: 'skipped' },
+        'whatsappMessages.status': { $nin: ['skipped', 'failed'] },
       },
     },
     { $count: 'n' },
@@ -96,20 +112,26 @@ async function sentTodayTo(to) {
  * Build, send and log one message. Never throws.
  * @param {object} application  Application document (needs _id, name, phone)
  * @param {{ title?: string }|null} job
- * @param {'received'|'status'} kind
+ * @param {'received'|'status'|'interview'} kind
  * @param {string} applicationStatus  status the message is about
  */
 async function dispatch(application, job, kind, applicationStatus) {
   const now = new Date();
   const to = normalizePhone(application.phone);
-  const templateId =
-    kind === 'received' ? process.env.GUPSHUP_TPL_RECEIVED : process.env.GUPSHUP_TPL_STATUS_UPDATE;
+  const templateId = {
+    received: process.env.GUPSHUP_TPL_RECEIVED,
+    status: process.env.GUPSHUP_TPL_STATUS_UPDATE,
+    interview: process.env.GUPSHUP_TPL_INTERVIEW,
+  }[kind];
   const entry = { kind, applicationStatus, templateId, to, status: 'submitted', createdAt: now, updatedAt: now };
 
   try {
     if (!isConfigured() || !templateId) {
       entry.status = 'skipped';
-      entry.error = 'WhatsApp is not configured (missing Gupshup env vars or template id)';
+      entry.error =
+        kind === 'interview' && isConfigured()
+          ? 'Interview template not set yet (GUPSHUP_TPL_INTERVIEW)'
+          : 'WhatsApp is not configured (missing Gupshup env vars or template id)';
     } else if (!to) {
       entry.status = 'skipped';
       entry.error = 'Phone number is not a valid WhatsApp number';
@@ -121,8 +143,19 @@ async function dispatch(application, job, kind, applicationStatus) {
       const name = application.name;
       const title = job?.title || 'the position';
       const id = application.applicationNumber || String(application._id);
-      // Both templates share the same shape: body variables + a dynamic "track" button.
-      const params = kind === 'received' ? [name, title, id] : [name, title, copy.label, copy.message];
+      // All templates share the same shape: body variables + a dynamic "track" button.
+      let params;
+      if (kind === 'received') params = [name, title, id];
+      else if (kind === 'interview') {
+        const iv = application.interview || {};
+        params = [
+          name,
+          title,
+          formatIST(iv.scheduledAt, true, true),
+          MODE_LABEL[iv.mode] || 'In person',
+          iv.location || 'HR will share the details with you',
+        ];
+      } else params = [name, title, copy.label, copy.message];
 
       const result = await sendTemplate({ to, templateId, params, buttonParam: id });
       if (result.ok) {
@@ -157,8 +190,15 @@ async function notifyStatusChange(application, job, status, { force = false } = 
   return dispatch(application, job, status === 'received' ? 'received' : 'status', status);
 }
 
+/** Interview date/time message. Needs application.interview.scheduledAt. */
+async function notifyInterview(application, job) {
+  if (!application?.interview?.scheduledAt) return null;
+  return dispatch(application, job, 'interview', application.status);
+}
+
 module.exports = {
   STATUS_COPY,
+  notifyInterview,
   notifyApplicationReceived,
   notifyStatusChange,
   trackUrl,

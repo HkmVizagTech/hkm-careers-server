@@ -16,6 +16,7 @@ const {
   downloadResume,
   scheduleInterview,
   clearInterview,
+  resendInterview,
   addFollowUp,
   updateFollowUp,
   deleteFollowUp,
@@ -35,6 +36,7 @@ router.post('/:id/notes', auth, addNote);
 router.post('/:id/notify', auth, resendNotification);
 router.put('/:id/interview', auth, scheduleInterview);
 router.delete('/:id/interview', auth, clearInterview);
+router.post('/:id/interview/notify', auth, resendInterview);
 router.post('/:id/follow-ups', auth, addFollowUp);
 router.patch('/:id/follow-ups/:fid', auth, updateFollowUp);
 router.delete('/:id/follow-ups/:fid', auth, deleteFollowUp);

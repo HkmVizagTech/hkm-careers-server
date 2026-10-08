@@ -16,9 +16,10 @@ function istDateKey(date = new Date()) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
 }
 
-/** "Fri, 9 Oct, 10:30 am" in India time. */
-function formatIST(date, withTime = true) {
+/** "Fri, 9 Oct, 10:30 am" in India time (withYear: "Fri, 9 Oct 2026, 10:30 am"). */
+function formatIST(date, withTime = true, withYear = false) {
   const opts = { timeZone: TZ, weekday: 'short', day: 'numeric', month: 'short' };
+  if (withYear) opts.year = 'numeric';
   if (withTime) Object.assign(opts, { hour: 'numeric', minute: '2-digit', hour12: true });
   return new Intl.DateTimeFormat('en-IN', opts).format(new Date(date));
 }

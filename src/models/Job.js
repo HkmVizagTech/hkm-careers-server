@@ -66,6 +66,13 @@ const jobSchema = new mongoose.Schema(
     deadline: {
       type: Date,
     },
+    // How many people will be hired. When this many are Selected, the job closes itself.
+    openings: {
+      type: Number,
+      default: 1,
+      min: 1,
+      max: 500,
+    },
     applicationCount: {
       type: Number,
       default: 0,

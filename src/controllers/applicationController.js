@@ -8,8 +8,8 @@ const fs = require('fs');
 const { GetObjectCommand } = require('@aws-sdk/client-s3');
 const { s3Client, getResumeUrl, getResumeKey } = require('../config/r2');
 const { prefixFromTitle } = require('../utils/applicationNumber');
-const { notifyApplicationReceived, notifyStatusChange } = require('../utils/notifications');
-const { alertNewApplication } = require('../utils/adminAlerts');
+const { notifyApplicationReceived, notifyStatusChange, notifyInterview } = require('../utils/notifications');
+const { alertNewApplication, alertPositionFilled } = require('../utils/adminAlerts');
 const { formatIST } = require('../utils/dates');
 
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -100,6 +100,10 @@ const create = async (req, res, next) => {
     if (!job || job.status !== 'active' || (job.deadline && job.deadline <= new Date())) {
       return res.status(400).json({ message: 'Job is not accepting applications' });
     }
+    // Some roles are open to one gender only (set by admin on the job).
+    if (['male', 'female'].includes(job.targetGender) && req.body.gender !== job.targetGender) {
+      return res.status(400).json({ message: `This position is open to ${job.targetGender} applicants only.` });
+    }
 
     // File uploaded via multer-s3
     if (!req.file) {
@@ -131,6 +135,7 @@ const create = async (req, res, next) => {
       collegeName: req.body.collegeName || undefined,
       collegeCity: req.body.collegeCity || undefined,
       studyYears: req.body.studyYears || undefined,
+      source: String(req.body.source || '').toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 30) || undefined,
     };
 
     applicationData.applicationNumber = await generateApplicationNumber(job.title);
@@ -160,6 +165,30 @@ const create = async (req, res, next) => {
   }
 };
 
+const OPEN_STATUSES = ['received', 'under-review', 'shortlisted', 'interview'];
+
+/**
+ * When the number of selected candidates reaches the job's openings, close the job
+ * (so it stops taking applications) and report how many applicants are still open.
+ */
+async function checkRoleFilled(jobId) {
+  const job = await Job.findById(jobId).select('title status openings');
+  if (!job) return null;
+  const openings = job.openings || 1;
+  const [selected, remaining] = await Promise.all([
+    Application.countDocuments({ job: jobId, status: 'selected' }),
+    Application.countDocuments({ job: jobId, status: { $in: OPEN_STATUSES } }),
+  ]);
+  if (selected < openings) return null;
+  let closedNow = false;
+  if (job.status === 'active') {
+    const res = await Job.updateOne({ _id: jobId, status: 'active' }, { $set: { status: 'closed' } });
+    closedNow = res.modifiedCount > 0;
+    if (closedNow) alertPositionFilled(job, selected, remaining);
+  }
+  return { jobId: String(job._id), title: job.title, openings, selected, remaining, closedNow };
+}
+
 const updateStatus = async (req, res, next) => {
   try {
     const { status } = req.body;
@@ -186,7 +215,13 @@ const updateStatus = async (req, res, next) => {
       notification = await notifyStatusChange(application, application.job, status);
     }
 
-    res.json({ ...application.toObject(), notification });
+    // Filling the last opening closes the job and tells the admin how many are still in progress.
+    let roleFilled = null;
+    if (status === 'selected' && previous.status !== 'selected' && application.job?._id) {
+      roleFilled = await checkRoleFilled(application.job._id);
+    }
+
+    res.json({ ...application.toObject(), notification, roleFilled });
   } catch (error) {
     next(error);
   }
@@ -250,6 +285,7 @@ const CSV_COLUMNS = [
   ['Job', (a) => a.job?.title],
   ['Status', (a) => a.status],
   ['Applied On', (a) => formatIST(a.createdAt)],
+  ['Source', (a) => a.source || 'direct'],
   ['Location', (a) => a.location],
   ['Current Location', (a) => a.currentLocation],
   ['Gender', (a) => a.gender],
@@ -327,11 +363,27 @@ const scheduleInterview = async (req, res, next) => {
         },
       },
       { new: true, runValidators: true }
-    ).select('interview');
+    ).populate('job', 'title');
     if (!application) return res.status(404).json({ message: 'Application not found' });
     // Reminders for the old time are no longer true; the checks create fresh ones for the new time.
     await Notification.deleteMany({ application: application._id, type: 'interview' });
-    res.json({ interview: application.interview });
+    // WhatsApp the candidate the date/time unless the admin unticked it.
+    const notification = req.body.notify === false ? null : await notifyInterview(application, application.job);
+    res.json({ interview: application.interview, notification });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// POST /api/applications/:id/interview/notify -> re-send the interview details
+const resendInterview = async (req, res, next) => {
+  try {
+    const application = await Application.findById(req.params.id).populate('job', 'title');
+    if (!application) return res.status(404).json({ message: 'Application not found' });
+    if (!application.interview?.scheduledAt) return res.status(400).json({ message: 'No interview scheduled' });
+    const notification = await notifyInterview(application, application.job);
+    const fresh = await Application.findById(req.params.id).select('whatsappMessages');
+    res.json({ notification, whatsappMessages: fresh.whatsappMessages });
   } catch (error) {
     next(error);
   }
@@ -538,6 +590,9 @@ module.exports = {
   resumeFileName,
   scheduleInterview,
   clearInterview,
+  resendInterview,
+  checkRoleFilled,
+  OPEN_STATUSES,
   addFollowUp,
   updateFollowUp,
   deleteFollowUp,

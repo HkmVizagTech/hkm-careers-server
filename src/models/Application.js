@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 
 const whatsappMessageSchema = new mongoose.Schema(
   {
-    kind: { type: String, enum: ['received', 'status'], required: true },
+    kind: { type: String, enum: ['received', 'status', 'interview'], required: true },
     applicationStatus: { type: String },
     templateId: { type: String },
     to: { type: String, index: true },
@@ -123,6 +123,8 @@ const applicationSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
+    // Where the applicant found the job (from ?src= on shared links): linkedin, indeed, whatsapp...
+    source: { type: String, trim: true, lowercase: true, maxlength: 30 },
     whatsappMessages: [whatsappMessageSchema],
     // Interview the admin team has scheduled (admins get reminders the day before and shortly before).
     interview: {
