@@ -37,6 +37,8 @@ app.use(
       callback(new Error('Not allowed by CORS'));
     },
     credentials: true,
+    // Lets the admin app read download file names (resume, CSV export).
+    exposedHeaders: ['Content-Disposition'],
   })
 );
 app.use(express.json({ limit: '10mb' }));

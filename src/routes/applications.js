@@ -13,6 +13,7 @@ const {
   remove,
   trackStatus,
   exportCsv,
+  downloadResume,
   scheduleInterview,
   clearInterview,
   addFollowUp,
@@ -28,6 +29,7 @@ router.post('/', upload.single('resume'), createValidation, create);
 router.get('/', auth, getAll);
 router.get('/export', auth, exportCsv); // before '/:id'
 router.get('/:id', auth, getById);
+router.get('/:id/resume', auth, downloadResume);
 router.patch('/:id/status', auth, updateStatus);
 router.post('/:id/notes', auth, addNote);
 router.post('/:id/notify', auth, resendNotification);

@@ -3,7 +3,11 @@ const Application = require('../models/Application');
 const Job = require('../models/Job');
 const Notification = require('../models/Notification');
 const { generateApplicationNumber } = require('../utils/applicationNumber');
-const { getResumeUrl, getResumeKey } = require('../config/r2');
+const path = require('path');
+const fs = require('fs');
+const { GetObjectCommand } = require('@aws-sdk/client-s3');
+const { s3Client, getResumeUrl, getResumeKey } = require('../config/r2');
+const { prefixFromTitle } = require('../utils/applicationNumber');
 const { notifyApplicationReceived, notifyStatusChange } = require('../utils/notifications');
 const { alertNewApplication } = require('../utils/adminAlerts');
 const { formatIST } = require('../utils/dates');
@@ -397,6 +401,85 @@ const deleteFollowUp = async (req, res, next) => {
   }
 };
 
+// ---------------------------------------------------------------- resume
+
+const RESUME_TYPES = {
+  '.pdf': 'application/pdf',
+  '.doc': 'application/msword',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+};
+
+/** "FSD_Chaitanya_Kumar.pdf": role short form + applicant name. */
+function resumeFileName(application, ext) {
+  const fromNumber = /^([A-Z]+)\d+$/.exec(application.applicationNumber || '')?.[1];
+  const prefix = fromNumber || prefixFromTitle(application.job?.title);
+  const name =
+    String(application.name || 'Applicant')
+      .normalize('NFC')
+      .replace(/[^\p{L}\p{M}\p{N}\s_-]/gu, '') // keeps Telugu/Hindi names too
+      .trim()
+      .replace(/\s+/g, '_')
+      .slice(0, 60) || 'Applicant';
+  return `${prefix}_${name}${ext}`;
+}
+
+/** Readable stream + content type for the stored resume, from R2, local disk, or its public URL. */
+async function openResume(application) {
+  const key = application.resumeKey;
+  if (s3Client && key) {
+    const obj = await s3Client.send(new GetObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: key }));
+    return { body: obj.Body, type: obj.ContentType, length: obj.ContentLength };
+  }
+  if (application.resumeUrl?.startsWith('/uploads/')) {
+    const file = path.join(__dirname, '..', '..', application.resumeUrl.replace(/^\/+/, ''));
+    if (fs.existsSync(file)) return { body: fs.createReadStream(file), length: fs.statSync(file).size };
+  }
+  if (/^https?:\/\//.test(application.resumeUrl || '')) {
+    const res = await fetch(application.resumeUrl);
+    if (res.ok) {
+      const { Readable } = require('stream');
+      return { body: Readable.fromWeb(res.body), type: res.headers.get('content-type'), length: Number(res.headers.get('content-length')) || undefined };
+    }
+  }
+  return null;
+}
+
+// GET /api/applications/:id/resume?inline=1 -> the resume file named e.g. FSD_Chaitanya.pdf
+const downloadResume = async (req, res, next) => {
+  try {
+    const application = await Application.findById(req.params.id)
+      .select('name applicationNumber resumeUrl resumeKey job')
+      .populate('job', 'title');
+    if (!application) return res.status(404).json({ message: 'Application not found' });
+
+    const ext = (path.extname(application.resumeKey || application.resumeUrl || '').toLowerCase().split('?')[0]) || '.pdf';
+    const file = await openResume(application).catch((err) => {
+      console.error('[resume] could not read file:', err.message);
+      return null;
+    });
+    if (!file) return res.status(404).json({ message: 'Resume file not found' });
+
+    const filename = resumeFileName(application, ext);
+    const inline = req.query.inline === '1' || req.query.inline === 'true';
+    res.setHeader('Content-Type', RESUME_TYPES[ext] || file.type || 'application/octet-stream');
+    if (file.length) res.setHeader('Content-Length', String(file.length));
+    res.setHeader(
+      'Content-Disposition',
+      // filename= must be plain ASCII; filename*= carries the exact (possibly Telugu) name.
+      `${inline ? 'inline' : 'attachment'}; filename="${filename.replace(/[^\x20-\x7E]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(filename)}`
+    );
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+    res.setHeader('Cache-Control', 'private, no-store');
+    file.body.on('error', (err) => {
+      console.error('[resume] stream failed:', err.message);
+      res.destroy(err);
+    });
+    file.body.pipe(res);
+  } catch (error) {
+    next(error);
+  }
+};
+
 const trackStatus = async (req, res, next) => {
   try {
     // Accepts the short number (FSD10001, any case) or, for older applications, the long id.
@@ -451,6 +534,8 @@ module.exports = {
   remove,
   trackStatus,
   exportCsv,
+  downloadResume,
+  resumeFileName,
   scheduleInterview,
   clearInterview,
   addFollowUp,
