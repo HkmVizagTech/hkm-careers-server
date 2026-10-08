@@ -85,8 +85,9 @@ test('received notification uses the received template and is logged', async () 
   assert.equal(entry.messageId, 'gs-2');
   const tpl = JSON.parse(calls[0].body.template);
   assert.equal(tpl.id, 'tpl-received');
-  assert.deepEqual(tpl.params, ['Radha', 'Web Developer', 'abc123']);
-  assert.deepEqual(JSON.parse(calls[0].body.message), { buttons: [{ type: 'url', index: 0, parameter: 'abc123' }] });
+  // body {{1}}-{{3}}, then the button URL variable last
+  assert.deepEqual(tpl.params, ['Radha', 'Web Developer', 'abc123', 'abc123']);
+  assert.equal(calls[0].body.message, undefined);
   assert.equal(log[0].update.$push.whatsappMessages.messageId, 'gs-2');
 });
 
@@ -97,8 +98,7 @@ test('status change uses the status template with label + message', async () => 
   const tpl = JSON.parse(calls[0].body.template);
   assert.equal(tpl.id, 'tpl-status');
   assert.equal(tpl.params[2], 'Not Selected');
-  assert.deepEqual(tpl.params, ['Radha', 'Web Developer', 'Not Selected', STATUS_COPY.rejected.message]);
-  assert.deepEqual(JSON.parse(calls[0].body.message), { buttons: [{ type: 'url', index: 0, parameter: 'abc123' }] });
+  assert.deepEqual(tpl.params, ['Radha', 'Web Developer', 'Not Selected', STATUS_COPY.rejected.message, 'abc123']);
   assert.match(STATUS_COPY.interview.message, /HR will get back to you with further details/);
 });
 

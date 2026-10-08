@@ -73,4 +73,13 @@ const gupshupWebhook = async (req, res) => {
   }
 };
 
-module.exports = { gupshupWebhook, nextStatus, tokenMatches };
+/**
+ * GET /api/webhooks/gupshup?key=...
+ * Gupshup pings the URL when you save it in the dashboard; answer 200 so it is accepted.
+ */
+const gupshupWebhookCheck = (req, res) => {
+  if (!tokenMatches(req.query.key)) return res.status(401).json({ message: 'Unauthorized' });
+  res.status(200).json({ ok: true });
+};
+
+module.exports = { gupshupWebhook, gupshupWebhookCheck, nextStatus, tokenMatches };

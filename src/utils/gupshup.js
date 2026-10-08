@@ -61,6 +61,8 @@ const maskPhone = (p) => (p ? `***${String(p).slice(-4)}` : 'n/a');
  * Send an approved template message.
  * @param {{ to: string, templateId: string, params: (string|number)[], buttonParam?: string }} opts
  * `buttonParam` fills the {{1}} of a dynamic URL button (the part after the fixed URL prefix).
+ * Gupshup reads a URL-button variable from the END of the params array, after the body variables,
+ * so it is appended there (confirmed on a live send).
  * @returns {Promise<{ ok: boolean, messageId?: string, error?: string }>}
  */
 async function sendTemplate({ to, templateId, params = [], buttonParam }) {
@@ -68,18 +70,17 @@ async function sendTemplate({ to, templateId, params = [], buttonParam }) {
   if (!to) return { ok: false, error: 'Missing destination number' };
   if (!templateId) return { ok: false, error: 'Missing template id' };
 
+  const allParams = params.map((p) => cleanParam(p));
+  // URL variable: keep it URL-safe (it is appended to https://.../track?id=).
+  if (buttonParam) allParams.push(encodeURIComponent(String(buttonParam).trim()) || '-');
+
   const body = new URLSearchParams({
     channel: 'whatsapp',
     source: String(process.env.GUPSHUP_SOURCE).replace(/\D/g, ''),
     destination: to,
     'src.name': process.env.GUPSHUP_APP_NAME,
-    template: JSON.stringify({ id: templateId, params: params.map((p) => cleanParam(p)) }),
+    template: JSON.stringify({ id: templateId, params: allParams }),
   });
-
-  // Dynamic "Visit website" button: Gupshup takes its variable in the `message` field.
-  if (buttonParam) {
-    body.set('message', JSON.stringify({ buttons: [{ type: 'url', index: 0, parameter: String(buttonParam) }] }));
-  }
 
   const controller = new AbortController();
   const timer = setTimeout(
