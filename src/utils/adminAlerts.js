@@ -15,6 +15,7 @@ const Notification = require('../models/Notification');
 const Application = require('../models/Application');
 const Job = require('../models/Job');
 const { istDateKey, formatIST } = require('./dates');
+const { interviewPlace } = require('./interviewPlace');
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
@@ -103,7 +104,8 @@ async function checkInterviews(now) {
   for (const app of upcoming) {
     const at = app.interview.scheduledAt;
     const soon = at.getTime() - now.getTime() <= 2 * HOUR;
-    const where = [MODE_LABEL[app.interview.mode], app.interview.location].filter(Boolean).join(' · ');
+    const place = interviewPlace(app.interview);
+    const where = [MODE_LABEL[app.interview.mode], place.venue, place.link].filter(Boolean).join(' · ');
     const doc = await createAlert({
       type: 'interview',
       title: soon ? `Interview starting soon: ${app.name}` : `Interview ${istDateKey(at) === istDateKey(now) ? 'today' : 'tomorrow'}: ${app.name}`,

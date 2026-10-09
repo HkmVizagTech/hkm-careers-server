@@ -10,6 +10,7 @@ const { notifyApplicationReceived, notifyStatusChange, notifyInterview } = requi
 const { alertNewApplication, alertPositionFilled } = require('../utils/adminAlerts');
 const { emailCustom, emailHrNewApplication } = require('../utils/emailNotifications');
 const { formatIST } = require('../utils/dates');
+const { interviewPlace, normalizeLink } = require('../utils/interviewPlace');
 
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -339,10 +340,17 @@ const exportCsv = async (req, res, next) => {
 
 // ---------------------------------------------------------------- interview
 
-// PUT /api/applications/:id/interview { scheduledAt, mode, location, notes }
+// PUT /api/applications/:id/interview { scheduledAt, mode, venue, link, notes, notify }
 const scheduleInterview = async (req, res, next) => {
   try {
-    const { scheduledAt, mode, location, notes } = req.body || {};
+    const { scheduledAt, mode, notes } = req.body || {};
+    // `location` (venue and link in one text) is what older admin pages send.
+    const legacy = !req.body?.venue && !req.body?.link && req.body?.location ? interviewPlace({ location: req.body.location }) : null;
+    const venue = String((legacy ? legacy.venue : req.body?.venue) || '').trim().slice(0, 200);
+    const link = normalizeLink(legacy ? legacy.link : req.body?.link);
+    if (link === null) {
+      return res.status(400).json({ message: 'The link does not look right. Paste the full Google Maps or meeting link.' });
+    }
     const at = new Date(scheduledAt);
     if (!scheduledAt || Number.isNaN(at.getTime())) {
       return res.status(400).json({ message: 'Please choose a valid interview date and time' });
@@ -357,7 +365,8 @@ const scheduleInterview = async (req, res, next) => {
           interview: {
             scheduledAt: at,
             mode: mode || undefined,
-            location: location ? String(location).trim().slice(0, 300) : undefined,
+            venue: venue || undefined,
+            link: link ? link.slice(0, 500) : undefined,
             notes: notes ? String(notes).trim().slice(0, 1000) : undefined,
             scheduledBy: req.user._id,
           },
@@ -540,7 +549,7 @@ const trackStatus = async (req, res, next) => {
           ? {
               scheduledAt: application.interview.scheduledAt,
               mode: application.interview.mode || 'in-person',
-              location: application.interview.location || '',
+              ...interviewPlace(application.interview),
             }
           : null,
     });

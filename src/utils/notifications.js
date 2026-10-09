@@ -28,10 +28,10 @@
  *    Your interview for the position of {{2}} has been scheduled.
  *    Date & Time: {{3}}
  *    Mode: {{4}}
- *    {{5}}   <- "Venue: ...", "Meeting link: ..." or "Phone: ..." depending on the mode
+ *    {{5}}   <- "Venue: <maps link>", "Meeting link: <link>" or "Details: ..." depending on the mode
  *    Please be available on time. If you have any questions, HR will be happy to help.
  *    Thank you for your interest in serving with Hare Krishna Movement.
- *    (approved without a button -> only the 5 body params are sent; see hasTrackButton)
+ *    [Button: Track Application, dynamic URL  https://careers.harekrishnavizag.org/track?id={{1}}]
  *    body params: [candidate name, job title, date & time, mode, venue or link]
  *
  * Every send is recorded on the application (`whatsappMessages`) and updated later by the
@@ -41,6 +41,7 @@
 const Application = require('../models/Application');
 const { isConfigured, normalizePhone, sendTemplate, maskPhone } = require('./gupshup');
 const { formatIST } = require('./dates');
+const { interviewPlace } = require('./interviewPlace');
 const { emailCandidate } = require('./emailNotifications');
 
 const MODE_LABEL = { 'in-person': 'In person', phone: 'Phone call', video: 'Video call' };
@@ -52,9 +53,10 @@ const MODE_LABEL = { 'in-person': 'In person', phone: 'Phone call', video: 'Vide
  */
 const LATER = 'HR will share the details with you';
 function interviewWhereLine(iv = {}) {
-  const value = String(iv.location || '').trim();
+  // WhatsApp runs a venue name and a link together, so when there's a link send only the link.
+  const { venue, link } = interviewPlace(iv);
   const label = iv.mode === 'video' ? 'Meeting link' : iv.mode === 'phone' ? 'Details' : 'Venue';
-  return `${label}: ${value || LATER}`;
+  return `${label}: ${link || venue || LATER}`;
 }
 
 const STATUS_COPY = {
@@ -102,12 +104,12 @@ function trackUrl(applicationId) {
 
 /**
  * Whether the approved template has the dynamic "Track Application" button, whose value is sent
- * after the body variables. The received/status templates have it; the interview template was
- * approved without it (sending it gives "#2000 localizable_params (6) does not match ... (5)").
- * If the interview template is ever re-approved with the button, set GUPSHUP_TPL_INTERVIEW_BUTTON=true.
+ * after the body variables. All three templates have it now (the interview one was re-approved with
+ * the button). If a template without the button is ever used for interviews, set
+ * GUPSHUP_TPL_INTERVIEW_BUTTON=false, otherwise Gupshup fails with "#2000 localizable_params ... does not match".
  */
 function hasTrackButton(kind) {
-  if (kind === 'interview') return process.env.GUPSHUP_TPL_INTERVIEW_BUTTON === 'true';
+  if (kind === 'interview') return process.env.GUPSHUP_TPL_INTERVIEW_BUTTON !== 'false';
   return true;
 }
 

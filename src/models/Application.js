@@ -149,7 +149,9 @@ const applicationSchema = new mongoose.Schema(
     interview: {
       scheduledAt: { type: Date, index: true },
       mode: { type: String, enum: ['in-person', 'phone', 'video'] },
-      location: { type: String, trim: true }, // venue or meeting link
+      venue: { type: String, trim: true }, // venue name (in person) or call details (phone)
+      link: { type: String, trim: true }, // Google Maps link (in person) or meeting link (video)
+      location: { type: String, trim: true }, // older interviews: venue + link in one text
       notes: { type: String, trim: true },
       scheduledBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     },

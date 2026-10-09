@@ -3,6 +3,7 @@
  * Every builder returns { subject, html, text }.
  */
 const { formatIST } = require('./dates');
+const { interviewPlace } = require('./interviewPlace');
 
 const C = {
   navy: '#052057',
@@ -70,7 +71,7 @@ function layout({ preheader, heading, bodyHtml, footerNote }) {
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:#ffffff;border-radius:16px;overflow:hidden;font-family:Arial,Helvetica,sans-serif">
 <tr><td style="background:${C.navy};padding:20px 28px">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
-    <td><img src="${esc(logo)}" width="111" height="60" alt="Hare Krishna Movement Visakhapatnam" style="display:block;height:60px;width:auto;border:0;color:#ffffff;font-weight:bold;font-size:14px"></td>
+    <td><img src="${esc(logo)}" width="130" height="70" alt="Hare Krishna Movement Visakhapatnam" style="display:block;height:70px;width:auto;border:0;color:#ffffff;font-weight:bold;font-size:14px"></td>
     <td align="right" style="color:${C.cyan};font-size:11px;font-weight:bold;letter-spacing:2px">CAREERS</td>
   </tr></table>
 </td></tr>
@@ -141,7 +142,7 @@ function googleCalendarLink(app, job) {
     text: `Interview: ${job?.title || 'Hare Krishna Movement'}`,
     dates: `${fmt(start)}/${fmt(end)}`,
     details: `Interview with ${ORG}. Application No.: ${appNo(app)}`,
-    location: iv.location || '',
+    location: [interviewPlace(iv).venue, interviewPlace(iv).link].filter(Boolean).join(' '),
   });
   return `https://calendar.google.com/calendar/render?${q.toString()}`;
 }
@@ -151,24 +152,32 @@ function interviewScheduled(app, job) {
   const iv = app.interview || {};
   const when = formatIST(iv.scheduledAt, true, true);
   const mode = MODE_LABEL[iv.mode] || 'In person';
-  const isLink = /^https?:\/\//i.test(iv.location || '');
-  // Any URL in the venue text (e.g. a Google Maps link) becomes clickable.
-  const where = iv.location
-    ? esc(iv.location).replace(/(https?:\/\/[^\s<]+)/g, `<a href="$1" style="color:${C.ocean}">$1</a>`)
-    : 'HR will share the details with you';
+  const { venue, link } = interviewPlace(iv);
+  const linkHtml = link ? `<a href="${esc(link)}" style="color:${C.ocean}">${esc(link)}</a>` : '';
+  const isVideo = iv.mode === 'video';
   const subject = `Interview scheduled: ${title} on ${when}`;
   const html = layout({
     preheader: `Your interview is on ${when}.`,
     heading: 'Your interview has been scheduled',
     bodyHtml: `<p style="margin:0 0 14px">Hare Krishna ${esc(app.name)} 🙏</p>
 <p style="margin:0 0 6px">Your interview for the position of <strong>${esc(title)}</strong> has been scheduled.</p>
-${detailRows([['Date & time', `${when} (IST)`], ['Mode', mode], [iv.mode === 'video' ? 'Meeting link' : iv.mode === 'phone' ? 'Details' : 'Venue', where, true], ['Application No.', appNo(app)]])}
+${detailRows([
+  ['Date & time', `${when} (IST)`],
+  ['Mode', mode],
+  ...(isVideo
+    ? [['Meeting link', linkHtml || 'HR will share the details with you', true]]
+    : [
+        [iv.mode === 'phone' ? 'Details' : 'Venue', venue || (link ? '' : 'HR will share the details with you')],
+        ...(link ? [['Location', linkHtml, true]] : []),
+      ]),
+  ['Application No.', appNo(app)],
+])}
 <p style="margin:0">Please be available on time. If you have any questions, simply reply to this email.</p>
-${isLink ? button(iv.location, 'Join the meeting') : ''}
+${link ? button(link, isVideo ? 'Join the meeting' : 'Open in Google Maps') : ''}
 <p style="margin:14px 0 0;font-size:13px"><a href="${esc(googleCalendarLink(app, job))}" style="color:${C.ocean}">Add to Google Calendar</a> · <a href="${esc(trackLink(app))}" style="color:${C.ocean}">Track your application</a></p>`,
     footerNote: 'Thank you for your interest in serving with Hare Krishna Movement.',
   });
-  const text = `Hare Krishna ${app.name},\n\nYour interview for the position of ${title} has been scheduled.\n\nDate & Time: ${when} (IST)\nMode: ${mode}\nVenue / Link: ${iv.location || 'HR will share the details with you'}\n\nPlease be available on time. If you have any questions, reply to this email.\nTrack your application: ${trackLink(app)}${textFooter()}`;
+  const text = `Hare Krishna ${app.name},\n\nYour interview for the position of ${title} has been scheduled.\n\nDate & Time: ${when} (IST)\nMode: ${mode}\n${isVideo ? 'Meeting link' : 'Venue'}: ${[venue, link].filter(Boolean).join(' - ') || 'HR will share the details with you'}\n\nPlease be available on time. If you have any questions, reply to this email.\nTrack your application: ${trackLink(app)}${textFooter()}`;
   return { subject, html, text };
 }
 
