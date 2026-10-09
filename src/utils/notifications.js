@@ -31,7 +31,7 @@
  *    {{5}}   <- "Venue: ...", "Meeting link: ..." or "Phone: ..." depending on the mode
  *    Please be available on time. If you have any questions, HR will be happy to help.
  *    Thank you for your interest in serving with Hare Krishna Movement.
- *    [Button: Visit website, dynamic URL  https://careers.harekrishnavizag.org/track?id={{1}}]
+ *    (approved without a button -> only the 5 body params are sent; see hasTrackButton)
  *    body params: [candidate name, job title, date & time, mode, venue or link]
  *
  * Every send is recorded on the application (`whatsappMessages`) and updated later by the
@@ -101,6 +101,17 @@ function trackUrl(applicationId) {
 }
 
 /**
+ * Whether the approved template has the dynamic "Track Application" button, whose value is sent
+ * after the body variables. The received/status templates have it; the interview template was
+ * approved without it (sending it gives "#2000 localizable_params (6) does not match ... (5)").
+ * If the interview template is ever re-approved with the button, set GUPSHUP_TPL_INTERVIEW_BUTTON=true.
+ */
+function hasTrackButton(kind) {
+  if (kind === 'interview') return process.env.GUPSHUP_TPL_INTERVIEW_BUTTON === 'true';
+  return true;
+}
+
+/**
  * Build, send and log one message. Never throws.
  * @param {object} application  Application document (needs _id, name, phone)
  * @param {{ title?: string }|null} job
@@ -146,7 +157,7 @@ async function dispatch(application, job, kind, applicationStatus) {
         ];
       } else params = [name, title, copy.label, copy.message];
 
-      const result = await sendTemplate({ to, templateId, params, buttonParam: id });
+      const result = await sendTemplate({ to, templateId, params, buttonParam: hasTrackButton(kind) ? id : undefined });
       if (result.ok) {
         entry.messageId = result.messageId;
       } else {

@@ -16,6 +16,11 @@ const C = {
 };
 
 const ORG = 'Hare Krishna Movement, Visakhapatnam';
+// HR contact in every email footer (override with HR_CONTACT_EMAIL / HR_CONTACT_PHONE).
+const HR = {
+  email: process.env.HR_CONTACT_EMAIL || 'hrexecutive@hkmvizag.org',
+  phone: process.env.HR_CONTACT_PHONE || '+91 70751 26644',
+};
 
 const esc = (v) =>
   String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -56,16 +61,17 @@ function textToHtml(text) {
 }
 
 function layout({ preheader, heading, bodyHtml, footerNote }) {
-  const logo = `${siteUrl()}/icon.png`;
+  // White-text logo on the navy header band.
+  const logo = `${siteUrl()}/brand/hkm-logo-white.png`;
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(heading)}</title></head>
 <body style="margin:0;padding:0;background:${C.bg}">
 <div style="display:none;max-height:0;overflow:hidden;opacity:0">${esc(preheader || '')}</div>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${C.bg}"><tr><td align="center" style="padding:24px 12px">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:#ffffff;border-radius:16px;overflow:hidden;font-family:Arial,Helvetica,sans-serif">
 <tr><td style="background:${C.navy};padding:20px 28px">
-  <table role="presentation" cellpadding="0" cellspacing="0"><tr>
-    <td style="padding-right:12px"><img src="${esc(logo)}" width="40" height="40" alt="" style="display:block;border-radius:8px;background:#ffffff"></td>
-    <td style="color:#ffffff;font-size:15px;font-weight:bold;line-height:1.3">Hare Krishna Movement<br><span style="color:${C.cyan};font-size:12px;letter-spacing:1.5px">VISAKHAPATNAM · CAREERS</span></td>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+    <td><img src="${esc(logo)}" width="111" height="60" alt="Hare Krishna Movement Visakhapatnam" style="display:block;height:60px;width:auto;border:0;color:#ffffff;font-weight:bold;font-size:14px"></td>
+    <td align="right" style="color:${C.cyan};font-size:11px;font-weight:bold;letter-spacing:2px">CAREERS</td>
   </tr></table>
 </td></tr>
 <tr><td style="height:4px;background:linear-gradient(90deg,${C.ocean},${C.cyan},${C.gold});background-color:${C.cyan}"></td></tr>
@@ -76,11 +82,12 @@ function layout({ preheader, heading, bodyHtml, footerNote }) {
 <tr><td style="padding:8px 28px 28px;color:${C.muted};font-size:12px;line-height:1.6;border-top:1px solid ${C.line}">
   ${footerNote ? `<p style="margin:14px 0 6px">${footerNote}</p>` : ''}
   <p style="margin:${footerNote ? 0 : '14px'} 0 0">${ORG} · <a href="${esc(siteUrl())}" style="color:${C.ocean}">${esc(siteUrl().replace(/^https?:\/\//, ''))}</a></p>
+  <p style="margin:6px 0 0">HR: <a href="mailto:${esc(HR.email)}" style="color:${C.ocean}">${esc(HR.email)}</a> · <a href="tel:${esc(HR.phone.replace(/\s/g, ''))}" style="color:${C.ocean}">${esc(HR.phone)}</a></p>
 </td></tr>
 </table></td></tr></table></body></html>`;
 }
 
-const textFooter = () => `\n\n—\n${ORG}\n${siteUrl()}`;
+const textFooter = () => `\n\n—\n${ORG}\n${siteUrl()}\nHR: ${HR.email} · ${HR.phone}`;
 
 // ---------------------------------------------------------------- candidate emails
 

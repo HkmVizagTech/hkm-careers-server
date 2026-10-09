@@ -532,6 +532,17 @@ const trackStatus = async (req, res, next) => {
       job: application.job && typeof application.job === 'object' ? { title: application.job.title, location: application.job.location, type: application.job.type } : null,
       status: application.status,
       appliedAt: application.createdAt,
+      // Interview details only while the candidate is at the interview stage and it's not long past.
+      interview:
+        application.status === 'interview' &&
+        application.interview?.scheduledAt &&
+        application.interview.scheduledAt.getTime() > Date.now() - 24 * 60 * 60 * 1000
+          ? {
+              scheduledAt: application.interview.scheduledAt,
+              mode: application.interview.mode || 'in-person',
+              location: application.interview.location || '',
+            }
+          : null,
     });
   } catch (error) {
     next(error);
