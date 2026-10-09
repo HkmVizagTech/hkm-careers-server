@@ -89,6 +89,9 @@ test('received notification uses the received template and is logged', async () 
   assert.deepEqual(tpl.params, ['Radha', 'Web Developer', 'abc123', 'abc123']);
   assert.equal(calls[0].body.message, undefined);
   assert.equal(log[0].update.$push.whatsappMessages.messageId, 'gs-2');
+  // Email isn't set up in tests: nothing is logged or reported for it.
+  assert.equal(entry.email, undefined);
+  assert.ok(!log.some((l) => l.update.$push.emails));
 });
 
 test('status change uses the status template with label + message', async () => {
@@ -122,7 +125,7 @@ test('GUPSHUP_NOTIFY_STATUSES limits which statuses send', async () => {
   delete process.env.GUPSHUP_NOTIFY_STATUSES;
 });
 
-test('failures are logged as failed; unconfigured/invalid/over-limit are logged as skipped', async () => {
+test('failures are logged as failed; unconfigured/invalid are logged as skipped', async () => {
   configure(); log.length = 0; sentToday = 0;
   mockFetch(() => jsonRes(500, { status: 'error', message: 'boom' }));
   assert.equal((await notifyApplicationReceived(app, null)).status, 'failed');
@@ -131,10 +134,10 @@ test('failures are logged as failed; unconfigured/invalid/over-limit are logged 
   assert.equal(bad.status, 'skipped');
   assert.match(bad.error, /valid WhatsApp/);
 
+  // No per-number daily limit: repeated sends to the same number still go out.
+  mockFetch(() => jsonRes(200, { status: 'submitted', messageId: 'gs-x' }));
   sentToday = 99;
-  const capped = await notifyApplicationReceived(app, null);
-  assert.equal(capped.status, 'skipped');
-  assert.match(capped.error, /limit/);
+  assert.equal((await notifyApplicationReceived(app, null)).status, 'submitted');
   sentToday = 0;
 
   delete process.env.GUPSHUP_API_KEY;

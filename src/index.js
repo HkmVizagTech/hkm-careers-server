@@ -14,6 +14,7 @@ const dashboardRoutes = require('./routes/dashboard');
 const userRoutes = require('./routes/users');
 const webhookRoutes = require('./routes/webhooks');
 const notificationRoutes = require('./routes/notifications');
+const mailRoutes = require('./routes/mail');
 const { startReminderScheduler } = require('./utils/adminAlerts');
 
 const app = express();
@@ -70,6 +71,7 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/webhooks', webhookRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/mail', mailRoutes);
 
 // Error handler (must be after routes)
 app.use(errorHandler);

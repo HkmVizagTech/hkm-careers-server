@@ -28,7 +28,7 @@
  *    Your interview for the position of {{2}} has been scheduled.
  *    Date & Time: {{3}}
  *    Mode: {{4}}
- *    Venue / Link: {{5}}
+ *    {{5}}   <- "Venue: ...", "Meeting link: ..." or "Phone: ..." depending on the mode
  *    Please be available on time. If you have any questions, HR will be happy to help.
  *    Thank you for your interest in serving with Hare Krishna Movement.
  *    [Button: Visit website, dynamic URL  https://careers.harekrishnavizag.org/track?id={{1}}]
@@ -41,8 +41,21 @@
 const Application = require('../models/Application');
 const { isConfigured, normalizePhone, sendTemplate, maskPhone } = require('./gupshup');
 const { formatIST } = require('./dates');
+const { emailCandidate } = require('./emailNotifications');
 
 const MODE_LABEL = { 'in-person': 'In person', phone: 'Phone call', video: 'Video call' };
+
+/**
+ * {{5}} in the interview template is a whole line, labelled by the interview mode:
+ *   "Venue: Chaitanya Bhavan https://maps..." / "Meeting link: https://meet..." / "Details: HR will call you"
+ * With nothing entered (admin will share it later): "<label>: HR will share the details with you".
+ */
+const LATER = 'HR will share the details with you';
+function interviewWhereLine(iv = {}) {
+  const value = String(iv.location || '').trim();
+  const label = iv.mode === 'video' ? 'Meeting link' : iv.mode === 'phone' ? 'Details' : 'Venue';
+  return `${label}: ${value || LATER}`;
+}
 
 const STATUS_COPY = {
   received: {
@@ -87,27 +100,6 @@ function trackUrl(applicationId) {
   return base ? `${base}/track?id=${applicationId}` : String(applicationId);
 }
 
-// Guards one number against spam through the public form. Only messages that actually
-// went out count (failed / skipped attempts don't use up the allowance).
-const MAX_MESSAGES_PER_NUMBER_PER_DAY = Number(process.env.WHATSAPP_MAX_PER_NUMBER_PER_DAY) || 20;
-
-async function sentTodayTo(to) {
-  const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const rows = await Application.aggregate([
-    { $match: { 'whatsappMessages.to': to } },
-    { $unwind: '$whatsappMessages' },
-    {
-      $match: {
-        'whatsappMessages.to': to,
-        'whatsappMessages.createdAt': { $gte: since },
-        'whatsappMessages.status': { $nin: ['skipped', 'failed'] },
-      },
-    },
-    { $count: 'n' },
-  ]);
-  return rows[0]?.n || 0;
-}
-
 /**
  * Build, send and log one message. Never throws.
  * @param {object} application  Application document (needs _id, name, phone)
@@ -135,9 +127,6 @@ async function dispatch(application, job, kind, applicationStatus) {
     } else if (!to) {
       entry.status = 'skipped';
       entry.error = 'Phone number is not a valid WhatsApp number';
-    } else if ((await sentTodayTo(to)) >= MAX_MESSAGES_PER_NUMBER_PER_DAY) {
-      entry.status = 'skipped';
-      entry.error = 'Daily message limit for this number reached';
     } else {
       const copy = STATUS_COPY[applicationStatus] || { label: applicationStatus, message: '' };
       const name = application.name;
@@ -153,7 +142,7 @@ async function dispatch(application, job, kind, applicationStatus) {
           title,
           formatIST(iv.scheduledAt, true, true),
           MODE_LABEL[iv.mode] || 'In person',
-          iv.location || 'HR will share the details with you',
+          interviewWhereLine(iv),
         ];
       } else params = [name, title, copy.label, copy.message];
 
@@ -179,25 +168,41 @@ async function dispatch(application, job, kind, applicationStatus) {
   return entry;
 }
 
-/** "Thanks for applying" message. Fire-and-forget safe. */
+/**
+ * WhatsApp + email together. Resolves to the WhatsApp log entry with the email result
+ * attached as `.email`, so callers can report both.
+ */
+async function both(application, job, kind, status) {
+  const emailKind = kind;
+  const copy = STATUS_COPY[status] || { label: status, message: '' };
+  const [whatsapp, email] = await Promise.all([
+    dispatch(application, job, kind, status),
+    emailCandidate(application, job, emailKind, { status, copy }),
+  ]);
+  // Email not set up yet: report WhatsApp only.
+  return email?.notConfigured ? whatsapp : { ...whatsapp, email };
+}
+
+/** "Thanks for applying" message (WhatsApp + email). Fire-and-forget safe. */
 function notifyApplicationReceived(application, job) {
-  return dispatch(application, job, 'received', 'received');
+  return both(application, job, 'received', 'received');
 }
 
 /** Status-change message. Skips statuses not in GUPSHUP_NOTIFY_STATUSES unless `force`. */
 async function notifyStatusChange(application, job, status, { force = false } = {}) {
   if (!force && !notifyStatuses().includes(status)) return null;
-  return dispatch(application, job, status === 'received' ? 'received' : 'status', status);
+  return both(application, job, status === 'received' ? 'received' : 'status', status);
 }
 
 /** Interview date/time message. Needs application.interview.scheduledAt. */
 async function notifyInterview(application, job) {
   if (!application?.interview?.scheduledAt) return null;
-  return dispatch(application, job, 'interview', application.status);
+  return both(application, job, 'interview', application.status);
 }
 
 module.exports = {
   STATUS_COPY,
+  interviewWhereLine,
   notifyInterview,
   notifyApplicationReceived,
   notifyStatusChange,

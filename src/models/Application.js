@@ -19,6 +19,24 @@ const whatsappMessageSchema = new mongoose.Schema(
   }
 );
 
+// Every email sent about this application (candidate updates, admin messages, HR alert).
+const emailMessageSchema = new mongoose.Schema({
+  kind: {
+    type: String,
+    enum: ['received', 'status', 'interview', 'custom', 'hr-new-application'],
+    required: true,
+  },
+  applicationStatus: { type: String },
+  to: { type: String },
+  subject: { type: String },
+  body: { type: String }, // only for custom messages written by an admin
+  status: { type: String, enum: ['sent', 'failed', 'skipped'], default: 'sent' },
+  error: { type: String },
+  messageId: { type: String },
+  sentBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  createdAt: { type: Date, default: Date.now },
+});
+
 const applicationSchema = new mongoose.Schema(
   {
     // Short, human-friendly id shown to applicants (e.g. FSD10001). The Mongo _id stays the internal key.
@@ -126,6 +144,7 @@ const applicationSchema = new mongoose.Schema(
     // Where the applicant found the job (from ?src= on shared links): linkedin, indeed, whatsapp...
     source: { type: String, trim: true, lowercase: true, maxlength: 30 },
     whatsappMessages: [whatsappMessageSchema],
+    emails: [emailMessageSchema],
     // Interview the admin team has scheduled (admins get reminders the day before and shortly before).
     interview: {
       scheduledAt: { type: Date, index: true },

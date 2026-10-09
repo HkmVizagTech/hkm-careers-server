@@ -13,6 +13,7 @@ const {
   remove,
   trackStatus,
   exportCsv,
+  sendEmail,
   downloadResume,
   scheduleInterview,
   clearInterview,
@@ -34,6 +35,7 @@ router.get('/:id/resume', auth, downloadResume);
 router.patch('/:id/status', auth, updateStatus);
 router.post('/:id/notes', auth, addNote);
 router.post('/:id/notify', auth, resendNotification);
+router.post('/:id/email', auth, sendEmail);
 router.put('/:id/interview', auth, scheduleInterview);
 router.delete('/:id/interview', auth, clearInterview);
 router.post('/:id/interview/notify', auth, resendInterview);
