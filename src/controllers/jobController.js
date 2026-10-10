@@ -16,6 +16,23 @@ function normalizeDeadline(body) {
   return null;
 }
 
+/** Tidy the free-text fields and the qualification checkboxes before saving. */
+function normalizeContent(body) {
+  for (const key of ['description', 'responsibilities', 'qualifications']) {
+    if (typeof body[key] === 'string') {
+      body[key] = body[key].replace(/\r\n?/g, '\n').replace(/[ \t]+$/gm, '').replace(/\n{3,}/g, '\n\n').trim();
+    }
+  }
+  if ('qualificationTags' in body) {
+    const seen = new Set();
+    body.qualificationTags = (Array.isArray(body.qualificationTags) ? body.qualificationTags : [])
+      .map((t) => String(t ?? '').replace(/\s+/g, ' ').trim().slice(0, 80))
+      .filter((t) => t && !seen.has(t.toLowerCase()) && seen.add(t.toLowerCase()))
+      .slice(0, 30);
+  }
+  if (body.descriptionFormat !== undefined && !['points', 'text'].includes(body.descriptionFormat)) delete body.descriptionFormat;
+}
+
 const createValidation = [
   body('title').notEmpty().withMessage('Job title is required').trim(),
   body('department').notEmpty().withMessage('Department is required'),
@@ -98,6 +115,8 @@ const create = async (req, res, next) => {
       return res.status(400).json({ message: errors.array()[0].msg });
     }
 
+    normalizeContent(req.body);
+    if (!req.body.description) return res.status(400).json({ message: 'Description is required' });
     const deadlineError = normalizeDeadline(req.body);
     if (deadlineError) return res.status(400).json({ message: deadlineError });
     if ('openings' in req.body) {
@@ -115,6 +134,10 @@ const create = async (req, res, next) => {
 
 const update = async (req, res, next) => {
   try {
+    normalizeContent(req.body);
+    if ('description' in req.body && !req.body.description) {
+      return res.status(400).json({ message: 'Description is required' });
+    }
     if ('openings' in req.body) {
       const n = parseInt(req.body.openings, 10);
       req.body.openings = Number.isFinite(n) && n >= 1 ? Math.min(n, 500) : 1;

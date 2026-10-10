@@ -36,6 +36,17 @@ const jobSchema = new mongoose.Schema(
     qualifications: {
       type: String,
     },
+    // Ticked qualification checkboxes (e.g. "B.Tech", "Post Graduation"); qualifications holds any extra text.
+    qualificationTags: {
+      type: [String],
+      default: undefined,
+    },
+    // 'text': description/responsibilities are free text pasted as-is (headings, bullets, paragraphs).
+    // Missing on older jobs, where every line was one bullet point.
+    descriptionFormat: {
+      type: String,
+      enum: ['points', 'text'],
+    },
     experience: {
       type: String,
       trim: true,
