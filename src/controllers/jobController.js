@@ -20,7 +20,7 @@ function normalizeDeadline(body) {
 function normalizeContent(body) {
   for (const key of ['description', 'responsibilities', 'qualifications']) {
     if (typeof body[key] === 'string') {
-      body[key] = body[key].replace(/\r\n?/g, '\n').replace(/[ \t]+$/gm, '').replace(/\n{3,}/g, '\n\n').trim();
+      body[key] = body[key].replace(/\r\n?|[\u2028\u2029\u0085\v\f]/g, '\n').replace(/[ \t]+$/gm, '').replace(/\n{3,}/g, '\n\n').trim();
     }
   }
   if ('qualificationTags' in body) {
