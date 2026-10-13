@@ -21,10 +21,25 @@ const {
   addFollowUp,
   updateFollowUp,
   deleteFollowUp,
+  checkDuplicate,
 } = require('../controllers/applicationController');
+
+/** Simple per-IP limit for the public repeat-application check (20 per 10 minutes). */
+const checkHits = new Map();
+function limitChecks(req, res, next) {
+  const now = Date.now();
+  const ip = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.ip;
+  const hits = (checkHits.get(ip) || []).filter((t) => now - t < 10 * 60 * 1000);
+  if (hits.length >= 20) return res.json({ duplicate: false }); // stay quiet; the submit itself still checks
+  hits.push(now);
+  checkHits.set(ip, hits);
+  if (checkHits.size > 5000) checkHits.clear();
+  next();
+}
 
 // Public routes
 router.get('/track/:id', trackStatus);  // Public — no auth
+router.post('/check', limitChecks, checkDuplicate); // Public — warns about a repeat application early
 router.post('/', upload.single('resume'), createValidation, create);
 
 // Protected routes

@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const { validationResult, body } = require('express-validator');
 const Application = require('../models/Application');
 const Job = require('../models/Job');
@@ -7,6 +8,8 @@ const path = require('path');
 const { getResumeUrl, getResumeKey } = require('../config/r2');
 const { RESUME_TYPES, resumeFileName, openResume } = require('../utils/resumeFile');
 const { notifyApplicationReceived, notifyStatusChange, notifyInterview } = require('../utils/notifications');
+const { findDuplicate, otherApplicationsOf, discardUpload } = require('../utils/duplicates');
+const { emailKey, phoneKey } = require('../utils/contactKeys');
 const { alertNewApplication, alertPositionFilled } = require('../utils/adminAlerts');
 const { emailCustom, emailHrNewApplication } = require('../utils/emailNotifications');
 const { formatIST } = require('../utils/dates');
@@ -72,6 +75,39 @@ const getAll = async (req, res, next) => {
   }
 };
 
+/** 409 reply for a repeat application: which detail matched and the earlier application number. */
+function duplicateBody(dup, body, job) {
+  const byEmail = !!emailKey(body.email) && emailKey(dup.email) === emailKey(body.email);
+  const matchedBy = byEmail ? 'email' : 'phone';
+  return {
+    code: 'DUPLICATE_APPLICATION',
+    matchedBy,
+    applicationNumber: dup.applicationNumber || String(dup._id),
+    appliedAt: dup.createdAt,
+    message: `You have already applied for ${job.title} with this ${matchedBy === 'email' ? 'email address' : 'phone number'}. You don't need to apply again.`,
+  };
+}
+
+/**
+ * POST /api/applications/check { job, email, phone }  (public)
+ * Lets the apply form warn before the applicant fills in everything else.
+ */
+const checkDuplicate = async (req, res, next) => {
+  try {
+    const { job: jobId, email, phone } = req.body || {};
+    if (!jobId || !mongoose.isValidObjectId(jobId) || (!emailKey(email) && !phoneKey(phone))) {
+      return res.json({ duplicate: false });
+    }
+    const job = await Job.findById(jobId).select('title');
+    if (!job) return res.json({ duplicate: false });
+    const dup = await findDuplicate(job._id, email, phone);
+    if (!dup) return res.json({ duplicate: false });
+    res.json({ duplicate: true, ...duplicateBody(dup, { email, phone }, job) });
+  } catch (error) {
+    next(error);
+  }
+};
+
 const getById = async (req, res, next) => {
   try {
     const application = await Application.findById(req.params.id)
@@ -84,7 +120,9 @@ const getById = async (req, res, next) => {
       return res.status(404).json({ message: 'Application not found' });
     }
 
-    res.json(application);
+    // The same person's applications for other jobs (matched by email or phone).
+    const otherApplications = await otherApplicationsOf(application).catch(() => []);
+    res.json({ ...application.toObject(), otherApplications });
   } catch (error) {
     next(error);
   }
@@ -99,10 +137,18 @@ const create = async (req, res, next) => {
 
     const job = await Job.findById(req.body.job);
     if (!job || job.status !== 'active' || (job.deadline && job.deadline <= new Date())) {
+      await discardUpload(req.file);
       return res.status(400).json({ message: 'Job is not accepting applications' });
+    }
+    // One application per person per job (same email or same phone).
+    const dup = await findDuplicate(job._id, req.body.email, req.body.phone);
+    if (dup) {
+      await discardUpload(req.file);
+      return res.status(409).json(duplicateBody(dup, req.body, job));
     }
     // Some roles are open to one gender only (set by admin on the job).
     if (['male', 'female'].includes(job.targetGender) && req.body.gender !== job.targetGender) {
+      await discardUpload(req.file);
       return res.status(400).json({ message: `This position is open to ${job.targetGender} applicants only.` });
     }
 
@@ -577,6 +623,7 @@ const remove = async (req, res, next) => {
 };
 
 module.exports = {
+  checkDuplicate,
   getAll,
   getById,
   create,

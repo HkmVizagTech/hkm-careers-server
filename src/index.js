@@ -18,6 +18,7 @@ const mailRoutes = require('./routes/mail');
 const qualificationOptionRoutes = require('./routes/qualificationOptions');
 const emailDraftRoutes = require('./routes/emailDrafts');
 const { startReminderScheduler } = require('./utils/adminAlerts');
+const { backfillContactKeys } = require('./utils/duplicates');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -84,4 +85,6 @@ app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   // Admin reminders (unreviewed applications, interviews, job deadlines, follow-ups).
   if (process.env.DISABLE_REMINDERS !== 'true') startReminderScheduler();
+  // Older applications get the normalised email/phone used for the repeat-application check.
+  setTimeout(() => backfillContactKeys(), 10 * 1000).unref();
 });

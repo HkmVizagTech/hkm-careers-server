@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { emailKey, phoneKey } = require('../utils/contactKeys');
 
 const whatsappMessageSchema = new mongoose.Schema(
   {
@@ -176,6 +177,21 @@ const applicationSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+// Normalised email / phone (lower-case email, last 10 phone digits) for spotting repeat applications.
+applicationSchema.add({
+  emailKey: { type: String, select: true },
+  phoneKey: { type: String },
+});
+applicationSchema.pre('validate', function setContactKeys(next) {
+  if (this.isNew || this.isModified('email')) this.emailKey = emailKey(this.email);
+  if (this.isNew || this.isModified('phone')) this.phoneKey = phoneKey(this.phone);
+  next();
+});
+applicationSchema.index({ job: 1, emailKey: 1 });
+applicationSchema.index({ job: 1, phoneKey: 1 });
+applicationSchema.index({ emailKey: 1 });
+applicationSchema.index({ phoneKey: 1 });
 
 applicationSchema.index({ status: 1, createdAt: 1 });
 applicationSchema.index({ 'followUps.dueAt': 1, 'followUps.done': 1 });
