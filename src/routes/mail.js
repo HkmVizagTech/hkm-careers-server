@@ -1,7 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const auth = require('../middleware/auth');
-const { sendMail, isMailConfigured, transportKind, fromAddress } = require('../utils/mailer');
+const { sendMail, isMailConfigured, transportKind, transportDetails, fromAddress } = require('../utils/mailer');
+const { whatsappOn } = require('../utils/notifications');
 const { hrRecipients } = require('../utils/emailNotifications');
 const { testEmail } = require('../utils/emailTemplates');
 
@@ -13,6 +14,8 @@ router.get('/status', auth, (req, res) => {
     from: fromAddress() || null,
     replyTo: process.env.MAIL_REPLY_TO || null,
     hrRecipients: hrRecipients(),
+    ...transportDetails(),
+    whatsapp: { received: whatsappOn('received'), status: whatsappOn('status'), interview: whatsappOn('interview') },
   });
 });
 

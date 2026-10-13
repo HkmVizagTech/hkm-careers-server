@@ -182,18 +182,32 @@ async function dispatch(application, job, kind, applicationStatus) {
 }
 
 /**
+ * Which messages still go out on WhatsApp, so it can be phased out once email is running:
+ *   WHATSAPP_SEND=all (default) | none | a list of received,status,interview
+ */
+function whatsappOn(kind) {
+  const raw = String(process.env.WHATSAPP_SEND || 'all').trim().toLowerCase();
+  if (!raw || raw === 'all') return true;
+  if (raw === 'none' || raw === 'off' || raw === 'false') return false;
+  return raw.split(',').map((s) => s.trim()).includes(kind);
+}
+
+/**
  * WhatsApp + email together. Resolves to the WhatsApp log entry with the email result
  * attached as `.email`, so callers can report both.
  */
 async function both(application, job, kind, status) {
   const emailKind = kind;
   const copy = STATUS_COPY[status] || { label: status, message: '' };
+  const waOn = whatsappOn(kind);
   const [whatsapp, email] = await Promise.all([
-    dispatch(application, job, kind, status),
+    waOn ? dispatch(application, job, kind, status) : null,
     emailCandidate(application, job, emailKind, { status, copy }),
   ]);
+  // WhatsApp turned off for this message: report the email only (status 'off' tells the admin UI).
+  const wa = whatsapp || { kind, applicationStatus: status, status: 'off' };
   // Email not set up yet: report WhatsApp only.
-  return email?.notConfigured ? whatsapp : { ...whatsapp, email };
+  return email?.notConfigured ? wa : { ...wa, email };
 }
 
 /** "Thanks for applying" message (WhatsApp + email). Fire-and-forget safe. */
@@ -221,4 +235,5 @@ module.exports = {
   notifyStatusChange,
   trackUrl,
   notifyStatuses,
+  whatsappOn,
 };

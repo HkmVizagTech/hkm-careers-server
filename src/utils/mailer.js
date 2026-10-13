@@ -1,13 +1,17 @@
 /**
- * Email sending for the careers site. Two ways to send, picked from the env vars that are set:
+ * Email sending for the careers site. Picked from the env vars that are set (first match wins):
  *
- * 1) Gmail API (recommended on Railway: plain HTTPS, so it works on every plan)
+ * 1) Microsoft Graph (Microsoft 365 app registration with the Mail.Send application permission)
+ *      MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET   (sends as the MAIL_FROM mailbox)
+ *
+ * 2) Gmail API
  *      GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN
- *      The refresh token belongs to the Google account that sends (e.g. careers@harekrishnavizag.org).
  *
- * 2) SMTP (Gmail / Google Workspace app password, Zoho, ...). Railway only allows outbound SMTP
- *    on its higher plans; elsewhere it times out.
- *      SMTP_HOST (default smtp.gmail.com), SMTP_PORT (default 465), SMTP_USER, SMTP_PASS
+ * 3) SMTP with the mailbox's own email + password (Microsoft 365, Gmail app password, Zoho, ...)
+ *      SMTP_USER, SMTP_PASS, SMTP_HOST (default: smtp.office365.com for Microsoft domains, else smtp.gmail.com),
+ *      SMTP_PORT (default 587 for Microsoft 365 with STARTTLS, 465 otherwise)
+ *    Microsoft 365 turns password (basic auth) SMTP off by default at the end of December 2026;
+ *    move to option 1 before then.
  *
  * Common:
  *   MAIL_FROM       e.g. "HKM Vizag Careers <careers@harekrishnavizag.org>"
@@ -23,10 +27,13 @@ const TIMEOUT_MS = () => Number(process.env.MAIL_TIMEOUT_MS) || 20000;
 
 function transportKind() {
   const forced = (process.env.MAIL_TRANSPORT || '').toLowerCase();
+  const graphReady = !!(process.env.MS_TENANT_ID && process.env.MS_CLIENT_ID && process.env.MS_CLIENT_SECRET);
   const gmailReady = !!(process.env.GMAIL_CLIENT_ID && process.env.GMAIL_CLIENT_SECRET && process.env.GMAIL_REFRESH_TOKEN);
   const smtpReady = !!(process.env.SMTP_USER && process.env.SMTP_PASS);
+  if (forced === 'graph') return graphReady ? 'graph' : null;
   if (forced === 'gmail-api') return gmailReady ? 'gmail-api' : null;
   if (forced === 'smtp') return smtpReady ? 'smtp' : null;
+  if (graphReady) return 'graph';
   if (gmailReady) return 'gmail-api';
   if (smtpReady) return 'smtp';
   return null;
@@ -91,22 +98,110 @@ async function sendViaGmailApi(message) {
   return data.id;
 }
 
+// ---------------------------------------------------------------- Microsoft Graph
+
+let graphToken = null; // { token, expiresAt }
+
+/** The bare address in MAIL_FROM ("HKM Vizag Careers <careers@x.org>" -> careers@x.org). */
+function fromEmail() {
+  const from = fromAddress();
+  const m = from.match(/<([^>]+)>/);
+  return (m ? m[1] : from).trim();
+}
+
+async function graphAccessToken() {
+  if (graphToken && graphToken.expiresAt > Date.now() + 60_000) return graphToken.token;
+  const res = await fetch(`https://login.microsoftonline.com/${encodeURIComponent(process.env.MS_TENANT_ID)}/oauth2/v2.0/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: process.env.MS_CLIENT_ID,
+      client_secret: process.env.MS_CLIENT_SECRET,
+      scope: 'https://graph.microsoft.com/.default',
+      grant_type: 'client_credentials',
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.access_token) {
+    throw new Error(`Microsoft sign-in failed: ${data.error_description?.split('\r\n')[0] || data.error || `HTTP ${res.status}`}`);
+  }
+  graphToken = { token: data.access_token, expiresAt: Date.now() + (Number(data.expires_in) || 3600) * 1000 };
+  return graphToken.token;
+}
+
+/** Graph accepts the whole message as base64 MIME, so attachments and Reply-To work as in Gmail. */
+async function sendViaGraph(message) {
+  const raw = await new MailComposer(message).compile().build();
+  const token = await graphAccessToken();
+  const res = await fetch(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(fromEmail())}/sendMail`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'text/plain' },
+    body: raw.toString('base64'),
+  });
+  if (!res.ok) {
+    if (res.status === 401) graphToken = null;
+    const data = await res.json().catch(() => ({}));
+    const msg = data.error?.message || `HTTP ${res.status}`;
+    const hint =
+      res.status === 403
+        ? ' (the app needs the Mail.Send application permission with admin consent, and access to this mailbox)'
+        : res.status === 404
+          ? ' (MAIL_FROM must be a real mailbox in your Microsoft 365)'
+          : '';
+    throw new Error(`Microsoft Graph: ${msg}${hint}`);
+  }
+  return res.headers.get('request-id') || 'graph';
+}
+
 // ---------------------------------------------------------------- SMTP
+
+const isMicrosoftHost = (host) => /office365|outlook|microsoft/i.test(host || '');
+
+function smtpHost() {
+  if (process.env.SMTP_HOST) return process.env.SMTP_HOST;
+  // Gmail addresses use Gmail; everything else (like hkmvizag.org on Microsoft 365) defaults to Microsoft.
+  return /@(gmail|googlemail)\.com$/i.test(process.env.SMTP_USER || '') ? 'smtp.gmail.com' : 'smtp.office365.com';
+}
+
+/** Turn the usual Microsoft 365 / Gmail SMTP errors into something HR can act on. */
+function explainSmtpError(message) {
+  if (/5\.7\.139|SmtpClientAuthentication is disabled/i.test(message)) {
+    return 'Microsoft 365 has SMTP sign-in turned off for this mailbox. In the Microsoft 365 admin centre: Users > this user > Mail > Manage email apps > tick "Authenticated SMTP".';
+  }
+  if (/security defaults|5\.7\.57|basic authentication is disabled/i.test(message)) {
+    return 'Microsoft 365 is blocking password sign-in (Security defaults or MFA). Use the Microsoft Graph settings instead (MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET).';
+  }
+  if (/535|Invalid login|authentication unsuccessful|Username and Password not accepted/i.test(message)) {
+    return 'The email or password was not accepted. Check SMTP_USER and SMTP_PASS (for Gmail, use an app password).';
+  }
+  if (/5\.7\.60|SendAsDenied|not allowed to send as/i.test(message)) {
+    return `This mailbox is not allowed to send as ${fromEmail()}. Set MAIL_FROM to the same address as SMTP_USER.`;
+  }
+  if (/timed out|ETIMEDOUT|ECONNREFUSED|ESOCKET/i.test(message)) {
+    return `${message}. The mail server could not be reached on port ${Number(process.env.SMTP_PORT) || ''} — check SMTP_HOST / SMTP_PORT.`;
+  }
+  return message;
+}
 
 let smtpTransport = null;
 
 function getSmtpTransport() {
   if (!smtpTransport) {
-    const port = Number(process.env.SMTP_PORT) || 465;
+    const host = smtpHost();
+    const port = Number(process.env.SMTP_PORT) || (isMicrosoftHost(host) ? 587 : 465);
+    const secure = process.env.SMTP_SECURE ? process.env.SMTP_SECURE === 'true' : port === 465;
+    const local = /^(localhost|127\.)/.test(host);
     smtpTransport = nodemailer.createTransport({
-      host: process.env.SMTP_HOST || 'smtp.gmail.com',
+      host,
       port,
-      secure: process.env.SMTP_SECURE ? process.env.SMTP_SECURE === 'true' : port === 465,
+      secure,
+      // STARTTLS on 587: never send the password unencrypted (a local test server is the only exception).
+      requireTLS: !secure && !local && process.env.SMTP_REQUIRE_TLS !== 'false',
+      tls: { minVersion: 'TLSv1.2', ...(process.env.SMTP_TLS_INSECURE === 'true' ? { rejectUnauthorized: false } : {}) },
       auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
       connectionTimeout: 10000,
       greetingTimeout: 10000,
       socketTimeout: 20000,
-      ...(process.env.SMTP_TLS_INSECURE === 'true' ? { tls: { rejectUnauthorized: false } } : {}),
     });
   }
   return smtpTransport;
@@ -135,6 +230,10 @@ async function sendMail(mail) {
   };
 
   try {
+    if (via === 'graph') {
+      const id = await withTimeout(sendViaGraph(message), TIMEOUT_MS(), 'Microsoft Graph');
+      return { ok: true, messageId: id, via };
+    }
     if (via === 'gmail-api') {
       const id = await withTimeout(sendViaGmailApi(message), TIMEOUT_MS(), 'Gmail API');
       return { ok: true, messageId: id, via };
@@ -142,9 +241,7 @@ async function sendMail(mail) {
     const info = await withTimeout(getSmtpTransport().sendMail(message), TIMEOUT_MS(), 'SMTP');
     return { ok: true, messageId: info.messageId, via };
   } catch (err) {
-    const error = /timed out|ETIMEDOUT|ECONNREFUSED|ESOCKET/i.test(err.message) && via === 'smtp'
-      ? `${err.message}. If this runs on Railway, outbound SMTP may be blocked on your plan; use the Gmail API settings instead.`
-      : err.message;
+    const error = via === 'smtp' ? explainSmtpError(err.message) : err.message;
     console.error(`[mail] send failed via ${via}:`, error);
     return { ok: false, error: error.slice(0, 300), via };
   }
@@ -153,7 +250,16 @@ async function sendMail(mail) {
 /** For tests: drop cached clients after env changes. */
 function _reset() {
   cachedToken = null;
+  graphToken = null;
   smtpTransport = null;
 }
 
-module.exports = { sendMail, isMailConfigured, isValidEmail, transportKind, fromAddress, _reset };
+/** For the admin settings card: where mail goes out from (no secrets). */
+function transportDetails() {
+  const via = transportKind();
+  if (via === 'smtp') return { host: smtpHost(), port: Number(process.env.SMTP_PORT) || (isMicrosoftHost(smtpHost()) ? 587 : 465), user: process.env.SMTP_USER };
+  if (via === 'graph') return { mailbox: fromEmail() };
+  return {};
+}
+
+module.exports = { sendMail, isMailConfigured, isValidEmail, transportKind, transportDetails, fromAddress, explainSmtpError, _reset };
