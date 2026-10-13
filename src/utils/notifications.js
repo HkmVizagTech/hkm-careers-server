@@ -44,7 +44,7 @@ const { formatIST } = require('./dates');
 const { interviewPlace } = require('./interviewPlace');
 const { emailCandidate } = require('./emailNotifications');
 
-const MODE_LABEL = { 'in-person': 'In person', phone: 'Phone call', video: 'Video call' };
+const MODE_LABEL = { 'in-person': 'In person', phone: 'Phone call', video: 'Virtual interview' };
 
 /**
  * {{5}} in the interview template is a whole line, labelled by the interview mode:
@@ -182,11 +182,11 @@ async function dispatch(application, job, kind, applicationStatus) {
 }
 
 /**
- * Which messages still go out on WhatsApp, so it can be phased out once email is running:
- *   WHATSAPP_SEND=all (default) | none | a list of received,status,interview
+ * Candidate updates now go by email. WhatsApp is off unless switched back on:
+ *   WHATSAPP_SEND=none (default) | all | a list of received,status,interview
  */
 function whatsappOn(kind) {
-  const raw = String(process.env.WHATSAPP_SEND || 'all').trim().toLowerCase();
+  const raw = String(process.env.WHATSAPP_SEND || 'none').trim().toLowerCase();
   if (!raw || raw === 'all') return true;
   if (raw === 'none' || raw === 'off' || raw === 'false') return false;
   return raw.split(',').map((s) => s.trim()).includes(kind);

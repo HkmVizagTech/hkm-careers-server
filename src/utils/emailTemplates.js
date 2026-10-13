@@ -130,7 +130,7 @@ ${button(trackLink(app), 'Track your application')}`,
   return { subject, html, text };
 }
 
-const MODE_LABEL = { 'in-person': 'In person', phone: 'Phone call', video: 'Video call' };
+const MODE_LABEL = { 'in-person': 'In person', phone: 'Phone call', video: 'Virtual interview' };
 
 function googleCalendarLink(app, job) {
   const iv = app.interview;
@@ -198,6 +198,19 @@ ${detailRows([['Application No.', appNo(app)], ['Position', job?.title || '']])}
 
 // ---------------------------------------------------------------- HR email
 
+const SOURCE_LABEL = {
+  linkedin: 'LinkedIn',
+  indeed: 'Indeed',
+  naukri: 'Naukri',
+  whatsapp: 'WhatsApp',
+  instagram: 'Instagram',
+  facebook: 'Facebook',
+  referral: 'Referral / other',
+  google: 'Google search',
+};
+const sourceLabel = (src) =>
+  !src ? 'Careers site (direct)' : SOURCE_LABEL[String(src).toLowerCase()] || String(src).charAt(0).toUpperCase() + String(src).slice(1);
+
 function hrNewApplication(app, job, { hasAttachment }) {
   const title = job?.title || 'a position';
   const subject = `New application: ${app.name} for ${title} (${appNo(app)})`;
@@ -216,12 +229,12 @@ function hrNewApplication(app, job, { hasAttachment }) {
       ['Experience', experience],
       ['Available to join', app.availableToJoin],
       ['Education', [app.highestDegree, app.collegeName, app.studyYears].filter(Boolean).join(', ')],
-      ['Came from', app.source || 'Careers site (direct)'],
+      ['Came from', sourceLabel(app.source)],
     ])}
 ${app.coverLetter ? `<p style="margin:0 0 6px;font-size:13px;color:${C.muted}">Why should we hire them?</p><div style="padding:12px 14px;border-left:3px solid ${C.cyan};background:#f8fafc;font-size:14px">${textToHtml(app.coverLetter.slice(0, 1500))}</div>` : ''}
 <p style="margin:16px 0 0">${hasAttachment ? 'The resume is attached.' : 'The resume is available in the admin panel.'}</p>
 ${button(adminLink(app), 'Open in admin')}`,
-    footerNote: 'You get this because your address is in HR_NOTIFY_EMAILS.',
+    footerNote: 'You get this because you are on the HR alert list for new applications.',
   });
   const text = `New application for ${title}\n\nApplication No.: ${appNo(app)}\nName: ${app.name}\nPhone: ${app.phone}\nEmail: ${app.email}\nExperience: ${experience}\n\nOpen in admin: ${adminLink(app)}`;
   return { subject, html, text };

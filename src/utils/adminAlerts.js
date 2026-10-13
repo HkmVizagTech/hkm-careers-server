@@ -30,7 +30,7 @@ const config = () => ({
   intervalMinutes: num(process.env.REMINDER_INTERVAL_MINUTES, 15),
 });
 
-const MODE_LABEL = { 'in-person': 'In person', phone: 'Phone', video: 'Video call' };
+const MODE_LABEL = { 'in-person': 'In person', phone: 'Phone', video: 'Virtual interview' };
 
 /** Create an alert. With a dedupeKey, a second call with the same key is a no-op. Returns the doc or null. */
 async function createAlert(data) {
