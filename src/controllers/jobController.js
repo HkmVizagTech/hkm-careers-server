@@ -65,11 +65,21 @@ const getAll = async (req, res, next) => {
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const total = await Job.countDocuments(filter);
-    const jobs = await Job.find(filter)
+    let jobs = await Job.find(filter)
       .populate('department', 'name')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit));
+
+    // Admin list: how many applications per job are still waiting for a first look ("Received").
+    if (req.user && jobs.length) {
+      const counts = await Application.aggregate([
+        { $match: { job: { $in: jobs.map((j) => j._id) }, status: 'received' } },
+        { $group: { _id: '$job', n: { $sum: 1 } } },
+      ]);
+      const byJob = new Map(counts.map((c) => [String(c._id), c.n]));
+      jobs = jobs.map((j) => ({ ...j.toObject(), newApplications: byJob.get(String(j._id)) || 0 }));
+    }
 
     res.json({
       jobs,
