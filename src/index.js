@@ -19,6 +19,7 @@ const qualificationOptionRoutes = require('./routes/qualificationOptions');
 const emailDraftRoutes = require('./routes/emailDrafts');
 const documentRoutes = require('./routes/documents');
 const jobAlertRoutes = require('./routes/jobAlerts');
+const employeeRoutes = require('./routes/employees');
 const { startReminderScheduler } = require('./utils/adminAlerts');
 const { backfillContactKeys } = require('./utils/duplicates');
 
@@ -81,6 +82,7 @@ app.use('/api/qualification-options', qualificationOptionRoutes);
 app.use('/api/email-drafts', emailDraftRoutes);
 app.use('/api/documents', documentRoutes);
 app.use('/api/job-alerts', jobAlertRoutes);
+app.use('/api/employees', employeeRoutes);
 
 // Error handler (must be after routes)
 app.use(errorHandler);

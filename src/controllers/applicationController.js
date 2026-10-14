@@ -14,6 +14,8 @@ const { alertNewApplication, alertPositionFilled } = require('../utils/adminAler
 const { emailCustom, emailHrNewApplication } = require('../utils/emailNotifications');
 const { formatIST } = require('../utils/dates');
 const { logActivity, statusLabel } = require('../utils/activity');
+const { deleteFile } = require('../utils/secureStore');
+const Employee = require('../models/Employee');
 const { gradeAnswers } = require('../utils/screening');
 const { adminView: documentRequestView } = require('./documentController');
 const { interviewPlace, normalizeLink } = require('../utils/interviewPlace');
@@ -438,7 +440,7 @@ const scheduleInterview = async (req, res, next) => {
     if (mode && !['in-person', 'phone', 'video'].includes(mode)) {
       return res.status(400).json({ message: 'Invalid interview mode' });
     }
-    const before = await Application.findById(req.params.id).select('interview.scheduledAt');
+    const before = await Application.findById(req.params.id).select('interview.scheduledAt status');
     const application = await Application.findByIdAndUpdate(
       req.params.id,
       {
@@ -456,6 +458,21 @@ const scheduleInterview = async (req, res, next) => {
       { new: true, runValidators: true }
     ).populate('job', 'title');
     if (!application) return res.status(404).json({ message: 'Application not found' });
+    // Scheduling an interview moves an early-stage application to "Interview". No separate status email:
+    // the interview email already tells the candidate. Selected / rejected applications keep their status.
+    let statusChangedTo = null;
+    if (['received', 'under-review', 'shortlisted'].includes(application.status)) {
+      const from = application.status;
+      application.status = 'interview';
+      await Application.updateOne({ _id: application._id }, { $set: { status: 'interview' } });
+      statusChangedTo = 'interview';
+      await logActivity(application._id, {
+        type: 'status',
+        text: `Changed status from ${statusLabel(from)} to ${statusLabel('interview')} (interview scheduled)`,
+        by: req.user,
+        meta: { from, to: 'interview' },
+      });
+    }
     // Reminders for the old time are no longer true; the checks create fresh ones for the new time.
     await Notification.deleteMany({ application: application._id, type: 'interview' });
     // WhatsApp the candidate the date/time unless the admin unticked it.
@@ -467,7 +484,7 @@ const scheduleInterview = async (req, res, next) => {
       text: `${prev ? `Rescheduled the interview from ${formatIST(prev)} to` : 'Scheduled an interview for'} ${formatIST(at)}${mode ? ` (${MODE[mode]})` : ''}${notification?.email?.status === 'sent' ? ' and emailed the candidate' : ''}`,
       by: req.user,
     });
-    res.json({ interview: application.interview, notification });
+    res.json({ interview: application.interview, notification, status: application.status, statusChangedTo });
   } catch (error) {
     next(error);
   }
@@ -663,6 +680,12 @@ const remove = async (req, res, next) => {
     if (!application) {
       return res.status(404).json({ message: 'Application not found' });
     }
+
+    // An employee record made from it keeps everything; it just no longer links back.
+    await Employee.updateMany({ application: application._id }, { $unset: { application: 1 } });
+    // Its stored documents (ID proofs, certificates...) go with it.
+    const keys = (application.documentRequests || []).flatMap((r) => r.items.flatMap((i) => i.files.map((f) => f.storageKey)));
+    if (keys.length) await Promise.all(keys.map((k) => deleteFile(k).catch(() => null)));
 
     // Decrement application count on job
     await Job.findByIdAndUpdate(application.job, { $inc: { applicationCount: -1 } });

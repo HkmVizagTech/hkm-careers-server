@@ -13,6 +13,13 @@
  *                        POST   /api/applications/:id/documents/:rid/notify
  *                        GET    /api/applications/:id/documents/:rid/bank
  *                        DELETE /api/applications/:id/documents/:rid
+ *   HR adding / updating documents themselves:
+ *                        POST   /api/applications/:id/documents/:rid/items                    { label, required }
+ *                        PUT    /api/applications/:id/documents/:rid/items/:iid               { label, required }
+ *                        DELETE /api/applications/:id/documents/:rid/items/:iid
+ *                        POST   /api/applications/:id/documents/:rid/items/:iid/files         (multipart "file")
+ *                        DELETE /api/applications/:id/documents/:rid/items/:iid/files/:fid
+ *                        PUT    /api/applications/:id/documents/:rid/bank                     { holder, account, ifsc, ... }
  */
 const crypto = require('crypto');
 const path = require('path');
@@ -215,32 +222,35 @@ const removeItemFile = async (req, res, next) => {
 
 const IFSC = /^[A-Z]{4}0[A-Z0-9]{6}$/;
 
+/**
+ * Checks bank details from a form. `keepAccount` lets HR edit the other fields without retyping
+ * the account number. Returns { error } or { fields } ready to assign to request.bank.
+ */
+function parseBank(body, { keepAccount = false } = {}) {
+  const holder = clean(body?.holder, 100);
+  const account = String(body?.account || '').replace(/\s+/g, '');
+  const ifsc = clean(body?.ifsc, 11).toUpperCase();
+  const bankName = clean(body?.bankName, 100);
+  const branch = clean(body?.branch, 100);
+  const accountType = ['savings', 'current'].includes(body?.accountType) ? body.accountType : 'savings';
+  if (!holder) return { error: 'Enter the account holder name' };
+  if (!(keepAccount && !account) && !/^\d{9,18}$/.test(account)) return { error: 'Enter a valid account number (9 to 18 digits)' };
+  if (!IFSC.test(ifsc)) return { error: 'Enter a valid IFSC code, e.g. SBIN0001234' };
+  if (!bankName) return { error: 'Enter the bank name' };
+  const fields = { holder, ifsc, bankName, branch, accountType, submittedAt: new Date() };
+  if (account) Object.assign(fields, { accountEnc: encryptText(account), accountLast4: account.slice(-4) });
+  return { fields };
+}
+
 const saveBank = async (req, res, next) => {
   try {
     const found = await byToken(req, res);
     if (!found) return;
     const { app, r } = found;
     if (!r.bank?.wanted) return res.status(400).json({ message: 'Bank details were not requested.' });
-    const holder = clean(req.body?.holder, 100);
-    const account = String(req.body?.account || '').replace(/\s+/g, '');
-    const ifsc = clean(req.body?.ifsc, 11).toUpperCase();
-    const bankName = clean(req.body?.bankName, 100);
-    const branch = clean(req.body?.branch, 100);
-    const accountType = ['savings', 'current'].includes(req.body?.accountType) ? req.body.accountType : 'savings';
-    if (!holder) return res.status(400).json({ message: 'Enter the account holder name' });
-    if (!/^\d{9,18}$/.test(account)) return res.status(400).json({ message: 'Enter a valid account number (9 to 18 digits)' });
-    if (!IFSC.test(ifsc)) return res.status(400).json({ message: 'Enter a valid IFSC code, e.g. SBIN0001234' });
-    if (!bankName) return res.status(400).json({ message: 'Enter the bank name' });
-    Object.assign(r.bank, {
-      holder,
-      accountEnc: encryptText(account),
-      accountLast4: account.slice(-4),
-      ifsc,
-      bankName,
-      branch,
-      accountType,
-      submittedAt: new Date(),
-    });
+    const { error, fields } = parseBank(req.body);
+    if (error) return res.status(400).json({ message: error });
+    Object.assign(r.bank, fields);
     await app.save();
     res.json(candidateView(app, r));
   } catch (err) {
@@ -330,6 +340,10 @@ const createRequest = async (req, res, next) => {
     let email = null;
     if (req.body?.notify !== false) {
       email = await emailDocumentRequest(app, app.job, r, { link: linkFor(token), sender: req.user });
+      if (email?.status === 'sent') {
+        r.lastEmailedAt = new Date();
+        await app.save();
+      }
     }
     await logActivity(app._id, {
       type: 'documents',
@@ -370,6 +384,45 @@ const downloadFile = async (req, res, next) => {
 };
 
 // PATCH /api/applications/:id/documents/:rid/items/:iid { status: 'approved'|'rejected', note }
+/**
+ * Email the candidate this request's link (the re-upload version when HR rejected something).
+ * Records when, so the admin page can show "Emailed at …". Saves the application.
+ */
+async function sendRequestEmail(app, r, user) {
+  let token;
+  try {
+    token = decryptText(r.tokenEnc);
+  } catch {
+    // Key changed: issue a fresh link.
+    token = newToken();
+    r.tokenHash = hashToken(token);
+    r.tokenEnc = encryptText(token);
+  }
+  // Sending again keeps the link working for another two weeks.
+  const until = new Date(Date.now() + DEFAULT_DAYS * 86400e3);
+  if (!r.expiresAt || r.expiresAt < until) r.expiresAt = until;
+  await app.save();
+  const rejected = r.items.filter((i) => i.status === 'rejected');
+  const reupload = rejected.length > 0;
+  const email = await emailDocumentRequest(app, app.job, r, { link: linkFor(token), reminder: !reupload, reupload, sender: user });
+  if (email?.status === 'sent') {
+    const now = new Date();
+    r.lastEmailedAt = now;
+    rejected.forEach((i) => {
+      i.notifiedAt = now;
+    });
+    await app.save();
+    await logActivity(app._id, {
+      type: 'documents',
+      text: reupload
+        ? `Emailed the candidate to re-upload ${rejected.map((i) => `"${i.label}"`).join(', ')}`
+        : 'Sent the document upload link again',
+      by: user,
+    });
+  }
+  return { email, link: linkFor(token) };
+}
+
 const reviewItem = async (req, res, next) => {
   try {
     const app = await loadForAdmin(req, res);
@@ -382,6 +435,8 @@ const reviewItem = async (req, res, next) => {
     if (status === 'approved' && !item.files.length) return res.status(400).json({ message: 'Nothing has been uploaded yet' });
     item.status = status;
     item.note = status === 'rejected' ? clean(req.body?.note, 500) || 'Please upload a clearer copy.' : undefined;
+    item.reviewedAt = new Date();
+    item.notifiedAt = undefined;
     if (status === 'rejected' && r.status === 'submitted') r.status = 'open';
     refreshCompletion(r);
     await app.save();
@@ -393,7 +448,10 @@ const reviewItem = async (req, res, next) => {
     if (r.status === 'completed') {
       await logActivity(app._id, { type: 'documents', text: `All ${r.kind === 'joining' ? 'joining ' : ''}documents approved`, by: req.user });
     }
-    res.json({ requests: requestsOf(app) });
+    // "Ask to re-upload" can email the candidate straight away.
+    let email = null;
+    if (status === 'rejected' && req.body?.notify) email = (await sendRequestEmail(app, r, req.user)).email;
+    res.json({ requests: requestsOf(app), email });
   } catch (err) {
     next(err);
   }
@@ -406,28 +464,9 @@ const notifyCandidate = async (req, res, next) => {
     if (!app) return;
     const r = app.documentRequests.id(req.params.rid);
     if (!r || r.status === 'cancelled') return res.status(404).json({ message: 'Request not found' });
-    let token;
-    try {
-      token = decryptText(r.tokenEnc);
-    } catch {
-      // Key changed: issue a fresh link.
-      token = newToken();
-      r.tokenHash = hashToken(token);
-      r.tokenEnc = encryptText(token);
-    }
-    // Sending again keeps the link working for another two weeks.
-    const until = new Date(Date.now() + DEFAULT_DAYS * 86400e3);
-    if (!r.expiresAt || r.expiresAt < until) r.expiresAt = until;
-    await app.save();
-    const reupload = r.items.some((i) => i.status === 'rejected');
-    const email = await emailDocumentRequest(app, app.job, r, { link: linkFor(token), reminder: !reupload, reupload, sender: req.user });
+    const { email, link } = await sendRequestEmail(app, r, req.user);
     if (email?.notConfigured) return res.status(503).json({ message: 'Email is not set up yet.' });
-    await logActivity(app._id, {
-      type: 'documents',
-      text: reupload ? 'Emailed the candidate to re-upload documents' : 'Sent the document upload link again',
-      by: req.user,
-    });
-    res.json({ email, link: linkFor(token), requests: requestsOf(app) });
+    res.json({ email, link, requests: requestsOf(app) });
   } catch (err) {
     next(err);
   }
@@ -450,6 +489,162 @@ const revealBank = async (req, res, next) => {
 };
 
 // DELETE /api/applications/:id/documents/:rid -> removes the request, its files and stops the link
+// ---------------------------------------------------------------- HR adds / updates documents themselves
+
+/** Finds the application, request and (optionally) item for an admin route, or replies 404. */
+async function adminTarget(req, res, { needItem = false } = {}) {
+  const app = await loadForAdmin(req, res);
+  if (!app) return null;
+  const r = app.documentRequests.id(req.params.rid);
+  if (!r) {
+    res.status(404).json({ message: 'Request not found' });
+    return null;
+  }
+  const item = needItem ? r.items.id(req.params.iid) : null;
+  if (needItem && !item) {
+    res.status(404).json({ message: 'Document not found' });
+    return null;
+  }
+  return { app, r, item };
+}
+
+// POST /:id/documents/:rid/items  { label, required }
+const addItem = async (req, res, next) => {
+  try {
+    const t = await adminTarget(req, res);
+    if (!t) return;
+    const label = clean(req.body?.label, 120);
+    if (!label) return res.status(400).json({ message: 'Enter the document name' });
+    if (t.r.items.some((i) => i.label.toLowerCase() === label.toLowerCase())) {
+      return res.status(400).json({ message: 'That document is already in this list' });
+    }
+    if (t.r.items.length >= 30) return res.status(400).json({ message: 'This request already has 30 documents' });
+    t.r.items.push({ label, required: req.body?.required === true });
+    refreshCompletion(t.r);
+    await t.app.save();
+    await logActivity(t.app._id, { type: 'documents', text: `Added "${label}" to the documents list`, by: req.user });
+    res.status(201).json({ requests: requestsOf(t.app) });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// PUT /:id/documents/:rid/items/:iid  { label, required }
+const updateItem = async (req, res, next) => {
+  try {
+    const t = await adminTarget(req, res, { needItem: true });
+    if (!t) return;
+    const label = req.body?.label !== undefined ? clean(req.body.label, 120) : t.item.label;
+    if (!label) return res.status(400).json({ message: 'Enter the document name' });
+    if (t.r.items.some((i) => String(i._id) !== String(t.item._id) && i.label.toLowerCase() === label.toLowerCase())) {
+      return res.status(400).json({ message: 'That document is already in this list' });
+    }
+    const before = t.item.label;
+    t.item.label = label;
+    if (typeof req.body?.required === 'boolean') t.item.required = req.body.required;
+    refreshCompletion(t.r);
+    await t.app.save();
+    if (before !== label) await logActivity(t.app._id, { type: 'documents', text: `Renamed "${before}" to "${label}"`, by: req.user });
+    res.json({ requests: requestsOf(t.app) });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// DELETE /:id/documents/:rid/items/:iid  (removes the document and its files)
+const removeItem = async (req, res, next) => {
+  try {
+    const t = await adminTarget(req, res, { needItem: true });
+    if (!t) return;
+    const keys = t.item.files.map((f) => f.storageKey);
+    const label = t.item.label;
+    t.r.items.pull(t.item._id);
+    refreshCompletion(t.r);
+    await t.app.save();
+    await Promise.all(keys.map(deleteFile));
+    await logActivity(t.app._id, {
+      type: 'documents',
+      text: `Removed "${label}"${keys.length ? ` and its ${keys.length} file${keys.length === 1 ? '' : 's'}` : ''}`,
+      by: req.user,
+    });
+    res.json({ requests: requestsOf(t.app) });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// POST /:id/documents/:rid/items/:iid/files  (HR uploads a file; counts as approved)
+const adminUploadFile = async (req, res, next) => {
+  try {
+    const t = await adminTarget(req, res, { needItem: true });
+    if (!t) return;
+    if (!req.file) return res.status(400).json({ message: 'Please choose a file to upload' });
+    if (t.item.files.length >= MAX_FILES_PER_ITEM) {
+      return res.status(400).json({ message: `Up to ${MAX_FILES_PER_ITEM} files per document. Remove one first.` });
+    }
+    const ext = path.extname(req.file.originalname).toLowerCase();
+    const storageKey = await saveFile(req.file.buffer, t.app._id);
+    t.item.files.push({
+      storageKey,
+      name: clean(req.file.originalname, 150) || `document${ext}`,
+      mime: TYPES[ext],
+      size: req.file.size,
+      addedBy: req.user._id,
+      addedByName: req.user.name,
+    });
+    // HR added it themselves, so there's nothing to review.
+    t.item.status = 'approved';
+    t.item.note = undefined;
+    t.item.reviewedAt = new Date();
+    refreshCompletion(t.r);
+    await t.app.save();
+    await logActivity(t.app._id, { type: 'documents', text: `Uploaded a file for "${t.item.label}" (${t.item.files.at(-1).name})`, by: req.user });
+    res.status(201).json({ requests: requestsOf(t.app) });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// DELETE /:id/documents/:rid/items/:iid/files/:fid
+const adminRemoveFile = async (req, res, next) => {
+  try {
+    const t = await adminTarget(req, res, { needItem: true });
+    if (!t) return;
+    const file = t.item.files.id(req.params.fid);
+    if (!file) return res.status(404).json({ message: 'File not found' });
+    const { storageKey, name } = file;
+    t.item.files.pull(file._id);
+    if (!t.item.files.length) {
+      t.item.status = 'pending';
+      t.item.note = undefined;
+    }
+    refreshCompletion(t.r);
+    await t.app.save();
+    await deleteFile(storageKey);
+    await logActivity(t.app._id, { type: 'documents', text: `Deleted the file "${name}" from "${t.item.label}"`, by: req.user });
+    res.json({ requests: requestsOf(t.app) });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// PUT /:id/documents/:rid/bank  (HR enters or corrects bank details)
+const adminSaveBank = async (req, res, next) => {
+  try {
+    const t = await adminTarget(req, res);
+    if (!t) return;
+    const { error, fields } = parseBank(req.body, { keepAccount: !!t.r.bank?.accountEnc });
+    if (error) return res.status(400).json({ message: error });
+    Object.assign(t.r.bank, fields, { wanted: true });
+    refreshCompletion(t.r);
+    await t.app.save();
+    await logActivity(t.app._id, { type: 'documents', text: 'Updated the bank details', by: req.user });
+    res.json({ requests: requestsOf(t.app) });
+  } catch (err) {
+    next(err);
+  }
+};
+
 const deleteRequest = async (req, res, next) => {
   try {
     const app = await loadForAdmin(req, res);
@@ -469,6 +664,12 @@ const deleteRequest = async (req, res, next) => {
 };
 
 module.exports = {
+  addItem,
+  updateItem,
+  removeItem,
+  adminUploadFile,
+  adminRemoveFile,
+  adminSaveBank,
   receiveFile,
   getForCandidate,
   uploadItemFile,

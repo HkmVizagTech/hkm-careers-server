@@ -200,6 +200,8 @@ const documentFileSchema = new mongoose.Schema({
   mime: { type: String },
   size: { type: Number },
   uploadedAt: { type: Date, default: Date.now },
+  addedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // set when HR uploaded it (not the candidate)
+  addedByName: { type: String },
 });
 const documentRequestSchema = new mongoose.Schema(
   {
@@ -215,6 +217,8 @@ const documentRequestSchema = new mongoose.Schema(
         required: { type: Boolean, default: true },
         status: { type: String, enum: ['pending', 'uploaded', 'approved', 'rejected'], default: 'pending' },
         note: { type: String, trim: true, maxlength: 500 }, // HR's reason when asking for a re-upload
+        reviewedAt: { type: Date }, // last approve / re-upload decision
+        notifiedAt: { type: Date }, // when the candidate was emailed about this re-upload
         files: [documentFileSchema],
       },
     ],
@@ -233,10 +237,13 @@ const documentRequestSchema = new mongoose.Schema(
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     submittedAt: { type: Date },
     completedAt: { type: Date },
+    lastEmailedAt: { type: Date }, // last time the candidate was emailed this link
   },
   { timestamps: true }
 );
 applicationSchema.add({ documentRequests: [documentRequestSchema] });
+// Set when HR added this person to Employees (the employee record keeps its own copy of everything).
+applicationSchema.add({ employee: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee' } });
 
 // Answers to the job's screening questions; `screeningFlags` lists the ones that don't meet the requirement.
 applicationSchema.add({

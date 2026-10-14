@@ -203,6 +203,9 @@ ${detailRows([['Application No.', appNo(app)], ['Position', job?.title || '']])}
  * @param {{ kind: string, items: {label:string, required:boolean, status?:string, note?:string}[], message?: string, expiresAt?: Date, bank?: {wanted:boolean} }} request
  * @param {{ link: string, reminder?: boolean, reupload?: boolean, senderName?: string }} opts
  */
+/** Keep in step with TYPES / MAX_FILE in controllers/documentController.js. */
+const DOC_FORMATS = 'PDF, JPG, PNG, WEBP, HEIC, DOC or DOCX, up to 10 MB each';
+
 function documentRequest(app, job, request, { link, reminder = false, reupload = false, senderName } = {}) {
   const joining = request.kind === 'joining';
   const title = job?.title || 'the position';
@@ -231,6 +234,7 @@ function documentRequest(app, job, request, { link, reminder = false, reupload =
 <ul style="margin:0 0 14px;padding-left:20px">${list}${request.bank?.wanted && !reupload ? '<li style="margin:0 0 6px">Bank account details (for salary)</li>' : ''}</ul>
 ${request.message && !reupload ? textToHtml(request.message) : ''}
 ${button(link, reupload ? 'Re-upload documents' : 'Upload documents')}
+<p style="margin:10px 0 0;font-size:13px;color:${C.muted}"><strong>Accepted files:</strong> ${DOC_FORMATS}. A clear phone photo is fine.</p>
 <p style="margin:10px 0 0;font-size:13px;color:${C.muted}">This link is private to you; please don't share it.${request.expiresAt ? ` It works until ${esc(formatIST(request.expiresAt, false))}.` : ''} Files are stored securely and seen only by our HR team.</p>
 ${senderName ? `<p style="margin:18px 0 0">Regards,<br><strong>${esc(senderName)}</strong><br><span style="color:${C.muted}">HR Team, ${ORG}</span></p>` : ''}`,
     footerNote: 'Having trouble uploading? Reply to this email and we will help.',
@@ -240,7 +244,8 @@ ${senderName ? `<p style="margin:18px 0 0">Regards,<br><strong>${esc(senderName)
 ${intro.replace(/<[^>]+>/g, '')}
 ${items.map((i) => `- ${i.label}${i.required ? '' : ' (optional)'}${reupload && i.note ? ` — ${i.note}` : ''}`).join('\n')}${request.bank?.wanted && !reupload ? '\n- Bank account details' : ''}
 
-Upload here (private link): ${link}${textFooter()}`;
+Upload here (private link): ${link}
+Accepted files: ${DOC_FORMATS}.${textFooter()}`;
   return { subject, html, text };
 }
 
