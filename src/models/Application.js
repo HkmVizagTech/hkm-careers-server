@@ -24,7 +24,7 @@ const whatsappMessageSchema = new mongoose.Schema(
 const emailMessageSchema = new mongoose.Schema({
   kind: {
     type: String,
-    enum: ['received', 'status', 'interview', 'custom', 'hr-new-application'],
+    enum: ['received', 'status', 'interview', 'custom', 'hr-new-application', 'documents', 'hr-documents'],
     required: true,
   },
   applicationStatus: { type: String },
@@ -192,6 +192,79 @@ applicationSchema.index({ job: 1, emailKey: 1 });
 applicationSchema.index({ job: 1, phoneKey: 1 });
 applicationSchema.index({ emailKey: 1 });
 applicationSchema.index({ phoneKey: 1 });
+
+// Documents HR asked the candidate for, uploaded through a private link (see controllers/documentController.js).
+const documentFileSchema = new mongoose.Schema({
+  storageKey: { type: String, required: true }, // encrypted blob in R2 / private disk
+  name: { type: String, required: true },
+  mime: { type: String },
+  size: { type: Number },
+  uploadedAt: { type: Date, default: Date.now },
+});
+const documentRequestSchema = new mongoose.Schema(
+  {
+    kind: { type: String, enum: ['documents', 'joining'], default: 'documents' },
+    tokenHash: { type: String, index: true }, // sha256 of the link token (the link itself is never stored in plain text)
+    tokenEnc: { type: String }, // encrypted token, so HR can send the same link again
+    expiresAt: { type: Date },
+    message: { type: String, trim: true, maxlength: 2000 },
+    items: [
+      {
+        label: { type: String, required: true, trim: true, maxlength: 120 },
+        hint: { type: String, trim: true, maxlength: 200 },
+        required: { type: Boolean, default: true },
+        status: { type: String, enum: ['pending', 'uploaded', 'approved', 'rejected'], default: 'pending' },
+        note: { type: String, trim: true, maxlength: 500 }, // HR's reason when asking for a re-upload
+        files: [documentFileSchema],
+      },
+    ],
+    bank: {
+      wanted: { type: Boolean, default: false },
+      holder: { type: String, trim: true },
+      accountEnc: { type: String }, // encrypted account number
+      accountLast4: { type: String },
+      ifsc: { type: String, trim: true, uppercase: true },
+      bankName: { type: String, trim: true },
+      branch: { type: String, trim: true },
+      accountType: { type: String, trim: true },
+      submittedAt: { type: Date },
+    },
+    status: { type: String, enum: ['open', 'submitted', 'completed', 'cancelled'], default: 'open' },
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    submittedAt: { type: Date },
+    completedAt: { type: Date },
+  },
+  { timestamps: true }
+);
+applicationSchema.add({ documentRequests: [documentRequestSchema] });
+
+// Answers to the job's screening questions; `screeningFlags` lists the ones that don't meet the requirement.
+applicationSchema.add({
+  answers: [
+    {
+      question: { type: mongoose.Schema.Types.ObjectId },
+      label: { type: String },
+      type: { type: String },
+      value: { type: String },
+      meets: { type: Boolean },
+    },
+  ],
+  screeningFlags: [{ type: String }],
+});
+
+// Timeline of everything that happened on the application (see utils/activity.js).
+applicationSchema.add({
+  activity: [
+    {
+      type: { type: String, required: true }, // applied, status, interview, email, note, follow-up, documents, ...
+      text: { type: String, required: true },
+      by: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      byName: { type: String }, // "Candidate", "System", or the admin's name at the time
+      meta: { type: mongoose.Schema.Types.Mixed },
+      at: { type: Date, default: Date.now },
+    },
+  ],
+});
 
 applicationSchema.index({ status: 1, createdAt: 1 });
 applicationSchema.index({ 'followUps.dueAt': 1, 'followUps.done': 1 });

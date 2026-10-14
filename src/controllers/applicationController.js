@@ -13,6 +13,9 @@ const { emailKey, phoneKey } = require('../utils/contactKeys');
 const { alertNewApplication, alertPositionFilled } = require('../utils/adminAlerts');
 const { emailCustom, emailHrNewApplication } = require('../utils/emailNotifications');
 const { formatIST } = require('../utils/dates');
+const { logActivity, statusLabel } = require('../utils/activity');
+const { gradeAnswers } = require('../utils/screening');
+const { adminView: documentRequestView } = require('./documentController');
 const { interviewPlace, normalizeLink } = require('../utils/interviewPlace');
 
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -56,7 +59,7 @@ const getAll = async (req, res, next) => {
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const total = await Application.countDocuments(filter);
     const applications = await Application.find(filter)
-      .select('-whatsappMessages -emails')
+      .select('-whatsappMessages -emails -documentRequests -activity')
       .populate('job', 'title')
       .sort({ createdAt: -1 })
       .skip(skip)
@@ -114,7 +117,8 @@ const getById = async (req, res, next) => {
       .populate('job')
       .populate('notes.addedBy', 'name email')
       .populate('followUps.createdBy', 'name')
-      .populate('emails.sentBy', 'name');
+      .populate('emails.sentBy', 'name')
+      .populate('activity.by', 'name');
 
     if (!application) {
       return res.status(404).json({ message: 'Application not found' });
@@ -122,7 +126,9 @@ const getById = async (req, res, next) => {
 
     // The same person's applications for other jobs (matched by email or phone).
     const otherApplications = await otherApplicationsOf(application).catch(() => []);
-    res.json({ ...application.toObject(), otherApplications });
+    const out = application.toObject();
+    out.documentRequests = (application.documentRequests || []).map(documentRequestView).reverse();
+    res.json({ ...out, otherApplications });
   } catch (error) {
     next(error);
   }
@@ -157,6 +163,13 @@ const create = async (req, res, next) => {
       return res.status(400).json({ message: 'Resume file is required' });
     }
 
+    // Screening questions: required ones must be answered; answers that miss a requirement are flagged for HR.
+    const graded = gradeAnswers(job.questions, req.body.answers);
+    if (graded.error) {
+      await discardUpload(req.file);
+      return res.status(400).json({ message: graded.error });
+    }
+
     const applicationData = {
       job: req.body.job,
       name: req.body.name,
@@ -183,10 +196,17 @@ const create = async (req, res, next) => {
       collegeCity: req.body.collegeCity || undefined,
       studyYears: req.body.studyYears || undefined,
       source: String(req.body.source || '').toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 30) || undefined,
+      answers: graded.answers,
+      screeningFlags: graded.flags,
     };
 
     applicationData.applicationNumber = await generateApplicationNumber(job.title);
     const application = await Application.create(applicationData);
+    logActivity(application._id, {
+      type: 'applied',
+      text: `Applied${applicationData.source ? ` (came from ${applicationData.source})` : ''}`,
+      byName: 'Candidate',
+    });
 
     // Increment application count on job
     await Job.findByIdAndUpdate(req.body.job, { $inc: { applicationCount: 1 } });
@@ -262,6 +282,15 @@ const updateStatus = async (req, res, next) => {
     if (req.body.notify !== false && previous.status !== status) {
       notification = await notifyStatusChange(application, application.job, status);
     }
+    if (previous.status !== status) {
+      const emailed = notification?.email?.status === 'sent';
+      await logActivity(application._id, {
+        type: 'status',
+        text: `Changed status from ${statusLabel(previous.status)} to ${statusLabel(status)}${emailed ? ' (candidate emailed)' : req.body.notify === false ? ' (no email)' : ''}`,
+        by: req.user,
+        meta: { from: previous.status, to: status },
+      });
+    }
 
     // Filling the last opening closes the job and tells the admin how many are still in progress.
     let roleFilled = null;
@@ -269,7 +298,8 @@ const updateStatus = async (req, res, next) => {
       roleFilled = await checkRoleFilled(application.job._id);
     }
 
-    res.json({ ...application.toObject(), notification, roleFilled });
+    const { documentRequests, activity, ...plain } = application.toObject(); // eslint-disable-line no-unused-vars
+    res.json({ ...plain, notification, roleFilled });
   } catch (error) {
     next(error);
   }
@@ -298,8 +328,9 @@ const addNote = async (req, res, next) => {
     if (!application) {
       return res.status(404).json({ message: 'Application not found' });
     }
+    await logActivity(application._id, { type: 'note', text: 'Added an internal note', by: req.user });
 
-    res.json(application);
+    res.json({ notes: application.notes });
   } catch (error) {
     next(error);
   }
@@ -316,6 +347,7 @@ const resendNotification = async (req, res, next) => {
     const notification = await notifyStatusChange(application, application.job, application.status, {
       force: true,
     });
+    await logActivity(application._id, { type: 'email', text: `Re-sent the "${statusLabel(application.status)}" status email`, by: req.user });
     const fresh = await Application.findById(req.params.id).select('whatsappMessages');
     res.json({ notification, whatsappMessages: fresh.whatsappMessages });
   } catch (error) {
@@ -351,6 +383,8 @@ const CSV_COLUMNS = [
   ['Portfolio', (a) => a.portfolioUrl],
   ['Interview', (a) => (a.interview?.scheduledAt ? formatIST(a.interview.scheduledAt) : '')],
   ['Resume', (a) => a.resumeUrl],
+  ['Screening flags', (a) => (a.screeningFlags || []).join('; ')],
+  ['Screening answers', (a) => (a.answers || []).map((x) => `${x.label}: ${x.value}`).join(' | ')],
 ];
 
 function csvCell(value) {
@@ -366,7 +400,7 @@ const exportCsv = async (req, res, next) => {
   try {
     const filter = await buildFilter(req.query);
     const apps = await Application.find(filter)
-      .select('-whatsappMessages -emails -notes -followUps')
+      .select('-whatsappMessages -emails -notes -followUps -documentRequests -activity')
       .populate('job', 'title')
       .sort({ createdAt: -1 })
       .limit(10000)
@@ -404,6 +438,7 @@ const scheduleInterview = async (req, res, next) => {
     if (mode && !['in-person', 'phone', 'video'].includes(mode)) {
       return res.status(400).json({ message: 'Invalid interview mode' });
     }
+    const before = await Application.findById(req.params.id).select('interview.scheduledAt');
     const application = await Application.findByIdAndUpdate(
       req.params.id,
       {
@@ -425,6 +460,13 @@ const scheduleInterview = async (req, res, next) => {
     await Notification.deleteMany({ application: application._id, type: 'interview' });
     // WhatsApp the candidate the date/time unless the admin unticked it.
     const notification = req.body.notify === false ? null : await notifyInterview(application, application.job);
+    const MODE = { 'in-person': 'in person', phone: 'phone', video: 'virtual' };
+    const prev = before?.interview?.scheduledAt;
+    await logActivity(application._id, {
+      type: 'interview',
+      text: `${prev ? `Rescheduled the interview from ${formatIST(prev)} to` : 'Scheduled an interview for'} ${formatIST(at)}${mode ? ` (${MODE[mode]})` : ''}${notification?.email?.status === 'sent' ? ' and emailed the candidate' : ''}`,
+      by: req.user,
+    });
     res.json({ interview: application.interview, notification });
   } catch (error) {
     next(error);
@@ -438,6 +480,7 @@ const resendInterview = async (req, res, next) => {
     if (!application) return res.status(404).json({ message: 'Application not found' });
     if (!application.interview?.scheduledAt) return res.status(400).json({ message: 'No interview scheduled' });
     const notification = await notifyInterview(application, application.job);
+    await logActivity(application._id, { type: 'email', text: 'Re-sent the interview details', by: req.user });
     const fresh = await Application.findById(req.params.id).select('whatsappMessages');
     res.json({ notification, whatsappMessages: fresh.whatsappMessages });
   } catch (error) {
@@ -450,6 +493,7 @@ const clearInterview = async (req, res, next) => {
   try {
     const application = await Application.findByIdAndUpdate(req.params.id, { $unset: { interview: 1 } }, { new: true });
     if (!application) return res.status(404).json({ message: 'Application not found' });
+    await logActivity(application._id, { type: 'interview', text: 'Removed the scheduled interview', by: req.user });
     await Notification.deleteMany({ application: application._id, type: 'interview' });
     res.json({ interview: null });
   } catch (error) {
@@ -473,6 +517,7 @@ const addFollowUp = async (req, res, next) => {
       $push: { followUps: { dueAt: at, note: String(note).trim().slice(0, 500), createdBy: req.user._id } },
     });
     if (!updated) return res.status(404).json({ message: 'Application not found' });
+    await logActivity(req.params.id, { type: 'follow-up', text: `Set a reminder for ${formatIST(at)}: ${String(note).trim().slice(0, 120)}`, by: req.user });
     res.status(201).json({ followUps: await followUpsOf(req.params.id) });
   } catch (error) {
     next(error);
@@ -492,6 +537,9 @@ const updateFollowUp = async (req, res, next) => {
     }
     const result = await Application.updateOne({ _id: req.params.id, 'followUps._id': req.params.fid }, { $set: set });
     if (!result.matchedCount) return res.status(404).json({ message: 'Reminder not found' });
+    if (typeof req.body?.done === 'boolean') {
+      await logActivity(req.params.id, { type: 'follow-up', text: req.body.done ? 'Marked a reminder as done' : 'Reopened a reminder', by: req.user });
+    }
     res.json({ followUps: await followUpsOf(req.params.id) });
   } catch (error) {
     next(error);
@@ -561,6 +609,11 @@ const sendEmail = async (req, res, next) => {
     if (email.notConfigured) {
       return res.status(503).json({ message: 'Email is not set up yet. Ask the developer to add the email settings.' });
     }
+    await logActivity(application._id, {
+      type: 'email',
+      text: `${email.status === 'sent' ? 'Emailed' : 'Tried to email'} the candidate: "${subject}"`,
+      by: req.user,
+    });
     const fresh = await Application.findById(req.params.id).select('emails').populate('emails.sentBy', 'name');
     res.status(email.status === 'sent' ? 201 : 200).json({ email, emails: fresh.emails });
   } catch (error) {

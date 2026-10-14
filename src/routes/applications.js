@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const auth = require('../middleware/auth');
 const { upload } = require('../config/r2');
+const D = require('../controllers/documentController');
 const {
   getAll,
   getById,
@@ -49,6 +50,13 @@ router.get('/:id', auth, getById);
 router.get('/:id/resume', auth, downloadResume);
 router.patch('/:id/status', auth, updateStatus);
 router.post('/:id/notes', auth, addNote);
+// Document requests (upload link for the candidate, review by HR)
+router.post('/:id/documents', auth, D.createRequest);
+router.get('/:id/documents/:rid/files/:fid', auth, D.downloadFile);
+router.patch('/:id/documents/:rid/items/:iid', auth, D.reviewItem);
+router.post('/:id/documents/:rid/notify', auth, D.notifyCandidate);
+router.get('/:id/documents/:rid/bank', auth, D.revealBank);
+router.delete('/:id/documents/:rid', auth, D.deleteRequest);
 router.post('/:id/notify', auth, resendNotification);
 router.post('/:id/email', auth, sendEmail);
 router.put('/:id/interview', auth, scheduleInterview);

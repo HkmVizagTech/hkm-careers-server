@@ -91,4 +91,28 @@ async function emailHrNewApplication(application, job) {
   }
 }
 
-module.exports = { emailCandidate, emailCustom, emailHrNewApplication, hrRecipients };
+/** Private upload link for requested / joining documents (also used for reminders and re-upload requests). */
+async function emailDocumentRequest(application, job, request, { link, reminder, reupload, sender } = {}) {
+  try {
+    const built = templates.documentRequest(application, job, request, { link, reminder, reupload, senderName: sender?.name });
+    const replyTo = process.env.MAIL_REPLY_TO || (isValidEmail(sender?.email) ? sender.email : undefined);
+    return await send(application, { kind: 'documents', to: application.email, built, sentBy: sender?._id, replyTo });
+  } catch (err) {
+    console.error('[email] document request email failed:', err.message);
+    return { kind: 'documents', status: 'failed', error: err.message };
+  }
+}
+
+/** To the HR list: a candidate submitted their documents. */
+async function emailHrDocuments(application, job, request) {
+  const to = hrRecipients();
+  if (!to.length) return null;
+  try {
+    return await send(application, { kind: 'hr-documents', to, built: templates.hrDocumentsSubmitted(application, job, request) });
+  } catch (err) {
+    console.error('[email] HR documents email failed:', err.message);
+    return null;
+  }
+}
+
+module.exports = { emailCandidate, emailCustom, emailHrNewApplication, hrRecipients, emailDocumentRequest, emailHrDocuments };

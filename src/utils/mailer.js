@@ -226,7 +226,7 @@ async function sendMail(mail) {
     text: mail.text,
     replyTo: mail.replyTo || process.env.MAIL_REPLY_TO || undefined,
     attachments: mail.attachments,
-    headers: { 'X-Entity-Ref-ID': `careers-${Date.now()}` }, // stops Gmail threading unrelated mails
+    headers: { 'X-Entity-Ref-ID': `careers-${Date.now()}`, ...(mail.headers || {}) }, // Ref-ID stops Gmail threading unrelated mails
   };
 
   try {

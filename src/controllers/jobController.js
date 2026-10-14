@@ -3,6 +3,11 @@ const Job = require('../models/Job');
 const Notification = require('../models/Notification');
 const Application = require('../models/Application');
 const { notifyStatusChange } = require('../utils/notifications');
+const { logActivityMany } = require('../utils/activity');
+const { normalizeQuestions } = require('../utils/screening');
+
+// Loaded lazily: jobAlertController requires the Job model too.
+const sendAlertsForJob = (id) => require('./jobAlertController').sendAlertsForJob(id);
 
 const OPEN_STATUSES = ['received', 'under-review', 'shortlisted', 'interview'];
 const { endOfDayIST } = require('../utils/dates');
@@ -18,6 +23,10 @@ function normalizeDeadline(body) {
 
 /** Tidy the free-text fields and the qualification checkboxes before saving. */
 function normalizeContent(body) {
+  // Never settable from the admin form.
+  delete body.alertsSentAt;
+  delete body.applicationCount;
+  if ('questions' in body) body.questions = normalizeQuestions(body.questions);
   for (const key of ['description', 'responsibilities', 'qualifications']) {
     if (typeof body[key] === 'string') {
       body[key] = body[key].replace(/\r\n?|[\u2028\u2029\u0085\v\f]/g, '\n').replace(/[ \t]+$/gm, '').replace(/\n{3,}/g, '\n\n').trim();
@@ -71,6 +80,8 @@ const getAll = async (req, res, next) => {
       .skip(skip)
       .limit(parseInt(limit));
 
+    if (!req.user) jobs = jobs.map(publicJob);
+
     // Admin list: how many applications per job are still waiting for a first look ("Received").
     if (req.user && jobs.length) {
       const counts = await Application.aggregate([
@@ -94,13 +105,20 @@ const getAll = async (req, res, next) => {
   }
 };
 
+/** Public copy of a job: screening questions without the answers HR is looking for. */
+function publicJob(job) {
+  const o = job.toObject ? job.toObject() : job;
+  o.questions = (o.questions || []).map(({ accept, min, max, ...q }) => q); // eslint-disable-line no-unused-vars
+  return o;
+}
+
 const getBySlug = async (req, res, next) => {
   try {
     const job = await Job.findOne({ slug: req.params.slug }).populate('department', 'name');
     if (!job) {
       return res.status(404).json({ message: 'Job not found' });
     }
-    res.json(job);
+    res.json(req.user ? job : publicJob(job));
   } catch (error) {
     next(error);
   }
@@ -137,6 +155,8 @@ const create = async (req, res, next) => {
     const job = await Job.create(req.body);
     await job.populate('department', 'name');
     res.status(201).json(job);
+    // Published straight away: tell job-alert subscribers (in the background).
+    if (job.status === 'active') sendAlertsForJob(job._id);
   } catch (error) {
     next(error);
   }
@@ -154,6 +174,7 @@ const update = async (req, res, next) => {
     }
     const deadlineError = normalizeDeadline(req.body);
     if (deadlineError) return res.status(400).json({ message: deadlineError });
+    const before = await Job.findById(req.params.id).select('status');
     const job = await Job.findByIdAndUpdate(req.params.id, req.body, {
       new: true,
       runValidators: true,
@@ -164,6 +185,8 @@ const update = async (req, res, next) => {
     }
 
     res.json(job);
+    // Draft -> Active (published): tell job-alert subscribers once.
+    if (job.status === 'active' && before?.status !== 'active') sendAlertsForJob(job._id);
   } catch (error) {
     next(error);
   }
@@ -211,6 +234,11 @@ const closeRemaining = async (req, res, next) => {
     const apps = await Application.find({ job: job._id, status: { $in: OPEN_STATUSES } }).select('name phone applicationNumber status');
     const ids = apps.map((a) => a._id);
     await Application.updateMany({ _id: { $in: ids }, status: { $in: OPEN_STATUSES } }, { $set: { status: 'rejected' } });
+    await logActivityMany(ids, {
+      type: 'status',
+      text: `Moved to Not Selected when the job was closed${req.body?.notify === true ? ' (candidate emailed)' : ''}`,
+      by: req.user,
+    });
 
     const notify = req.body?.notify === true;
     res.json({ updated: ids.length, notified: notify ? ids.length : 0, jobClosed: true });

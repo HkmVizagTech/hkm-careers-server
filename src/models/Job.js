@@ -36,6 +36,19 @@ const jobSchema = new mongoose.Schema(
     qualifications: {
       type: String,
     },
+    // Screening questions shown on the apply form (see utils/screening.js).
+    questions: [
+      {
+        label: { type: String, required: true, trim: true, maxlength: 200 },
+        type: { type: String, enum: ['text', 'paragraph', 'yesno', 'choice', 'number'], default: 'text' },
+        required: { type: Boolean, default: true },
+        options: [{ type: String, trim: true }],
+        // Answers that meet the requirement (yes/no, choice). Others are flagged for HR.
+        accept: [{ type: String, trim: true }],
+        min: { type: Number },
+        max: { type: Number },
+      },
+    ],
     // Ticked qualification checkboxes (e.g. "B.Tech", "Post Graduation"); qualifications holds any extra text.
     qualificationTags: {
       type: [String],
@@ -84,6 +97,8 @@ const jobSchema = new mongoose.Schema(
       min: 1,
       max: 500,
     },
+    // When "new opening" emails went to job-alert subscribers (once per job).
+    alertsSentAt: { type: Date },
     applicationCount: {
       type: Number,
       default: 0,

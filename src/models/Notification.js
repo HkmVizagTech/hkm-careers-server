@@ -5,7 +5,7 @@ const notificationSchema = new mongoose.Schema(
   {
     type: {
       type: String,
-      enum: ['new-application', 'unreviewed', 'interview', 'job-closing', 'job-closed', 'follow-up', 'position-filled'],
+      enum: ['new-application', 'unreviewed', 'interview', 'job-closing', 'job-closed', 'follow-up', 'position-filled', 'documents'],
       required: true,
     },
     title: { type: String, required: true },

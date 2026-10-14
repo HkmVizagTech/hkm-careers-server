@@ -196,6 +196,131 @@ ${detailRows([['Application No.', appNo(app)], ['Position', job?.title || '']])}
   return { subject, html, text };
 }
 
+// ---------------------------------------------------------------- documents
+
+/**
+ * Ask the candidate to upload documents through their private link.
+ * @param {{ kind: string, items: {label:string, required:boolean, status?:string, note?:string}[], message?: string, expiresAt?: Date, bank?: {wanted:boolean} }} request
+ * @param {{ link: string, reminder?: boolean, reupload?: boolean, senderName?: string }} opts
+ */
+function documentRequest(app, job, request, { link, reminder = false, reupload = false, senderName } = {}) {
+  const joining = request.kind === 'joining';
+  const title = job?.title || 'the position';
+  const items = reupload ? request.items.filter((i) => i.status === 'rejected') : request.items.filter((i) => i.status !== 'approved');
+  const subject = reupload
+    ? `Please re-upload: ${items.map((i) => i.label).join(', ').slice(0, 80)}`
+    : `${reminder ? 'Reminder: ' : ''}${joining ? 'Joining documents' : 'Documents'} for ${title} (${appNo(app)})`;
+  const list = items
+    .map(
+      (i) =>
+        `<li style="margin:0 0 6px">${esc(i.label)}${i.required ? '' : ` <span style="color:${C.muted}">(optional)</span>`}${
+          reupload && i.note ? `<br><span style="color:#b91c1c;font-size:13px">${esc(i.note)}</span>` : ''
+        }</li>`
+    )
+    .join('');
+  const intro = reupload
+    ? 'Thank you for sending your documents. A few of them need to be uploaded again:'
+    : joining
+      ? `Congratulations on being selected for <strong>${esc(title)}</strong>. To complete your joining formalities, please upload the following:`
+      : `To take your application for <strong>${esc(title)}</strong> forward, please upload the following:`;
+  const html = layout({
+    preheader: reupload ? 'A few documents need to be uploaded again.' : 'Please upload your documents using your private link.',
+    heading: reupload ? 'Please re-upload a few documents' : joining ? 'Your joining documents' : 'Documents needed for your application',
+    bodyHtml: `<p style="margin:0 0 14px">Hare Krishna ${esc(app.name)} 🙏</p>
+<p style="margin:0 0 10px">${intro}</p>
+<ul style="margin:0 0 14px;padding-left:20px">${list}${request.bank?.wanted && !reupload ? '<li style="margin:0 0 6px">Bank account details (for salary)</li>' : ''}</ul>
+${request.message && !reupload ? textToHtml(request.message) : ''}
+${button(link, reupload ? 'Re-upload documents' : 'Upload documents')}
+<p style="margin:10px 0 0;font-size:13px;color:${C.muted}">This link is private to you; please don't share it.${request.expiresAt ? ` It works until ${esc(formatIST(request.expiresAt, false))}.` : ''} Files are stored securely and seen only by our HR team.</p>
+${senderName ? `<p style="margin:18px 0 0">Regards,<br><strong>${esc(senderName)}</strong><br><span style="color:${C.muted}">HR Team, ${ORG}</span></p>` : ''}`,
+    footerNote: 'Having trouble uploading? Reply to this email and we will help.',
+  });
+  const text = `Hare Krishna ${app.name},
+
+${intro.replace(/<[^>]+>/g, '')}
+${items.map((i) => `- ${i.label}${i.required ? '' : ' (optional)'}${reupload && i.note ? ` — ${i.note}` : ''}`).join('\n')}${request.bank?.wanted && !reupload ? '\n- Bank account details' : ''}
+
+Upload here (private link): ${link}${textFooter()}`;
+  return { subject, html, text };
+}
+
+/** To HR: the candidate has submitted their documents. */
+function hrDocumentsSubmitted(app, job, request) {
+  const joining = request.kind === 'joining';
+  const subject = `${joining ? 'Joining documents' : 'Documents'} received: ${app.name} (${appNo(app)})`;
+  const html = layout({
+    preheader: `${app.name} uploaded their ${joining ? 'joining ' : ''}documents.`,
+    heading: `${app.name} uploaded ${joining ? 'joining ' : ''}documents`,
+    bodyHtml: `${detailRows([
+      ['Application No.', appNo(app)],
+      ['Position', job?.title || ''],
+      ['Uploaded', request.items.filter((i) => i.files?.length).map((i) => i.label).join(', ')],
+      ['Bank details', request.bank?.wanted ? (request.bank.submittedAt ? 'Submitted' : 'Not yet') : ''],
+    ])}
+<p style="margin:0">Review and approve them in the admin panel. Files are not attached to this email for privacy.</p>
+${button(adminLink(app), 'Review documents')}`,
+    footerNote: 'You get this because you are on the HR alert list.',
+  });
+  return { subject, html, text: `${subject}
+
+Review: ${adminLink(app)}` };
+}
+
+// ---------------------------------------------------------------- job alerts
+
+const TYPE_LABEL = { 'full-time': 'Full time', 'part-time': 'Part time', volunteer: 'Volunteer', intern: 'Internship' };
+
+/** Plain one-paragraph summary of a job description (first sentences, no bullets). */
+function jobSummaryText(job, max = 260) {
+  const t = String(job.description || '')
+    .split('\n')
+    .map((l) => l.replace(/^[\s•●▪◦\-*–\d.)]+/, '').trim())
+    .filter((l) => l.length > 40)
+    .join(' ');
+  return t.length > max ? `${t.slice(0, max - 1).replace(/\s+\S*$/, '')}…` : t;
+}
+
+function jobAlertConfirm(sub, link) {
+  return {
+    subject: 'Confirm your job alerts from HKM Vizag Careers',
+    html: layout({
+      preheader: 'One click to start getting new openings by email.',
+      heading: 'Confirm your job alerts',
+      bodyHtml: `<p style="margin:0 0 14px">Hare Krishna${sub.name ? ` ${esc(sub.name)}` : ''} 🙏</p>
+<p style="margin:0">Please confirm that you'd like an email whenever we post a new opening${sub.departmentNames?.length ? ` in <strong>${esc(sub.departmentNames.join(', '))}</strong>` : ''}.</p>
+${button(link, 'Confirm my email')}
+<p style="margin:10px 0 0;font-size:13px;color:${C.muted}">Didn't ask for this? Just ignore this email and you won't hear from us.</p>`,
+    }),
+    text: `Please confirm your job alerts from HKM Vizag Careers: ${link}\n\nDidn't ask for this? Ignore this email.`,
+  };
+}
+
+function jobAlert(job, sub, { applyLink, manageLink }) {
+  const dept = typeof job.department === 'object' ? job.department?.name : '';
+  const subject = `New opening: ${job.title}${job.location ? ` (${job.location})` : ''}`;
+  const summary = jobSummaryText(job);
+  const html = layout({
+    preheader: summary || `${job.title} at ${ORG}`,
+    heading: `New opening: ${job.title}`,
+    bodyHtml: `<p style="margin:0 0 14px">Hare Krishna${sub.name ? ` ${esc(sub.name)}` : ''} 🙏</p>
+<p style="margin:0 0 6px">We've just posted a new opening that may interest you.</p>
+${detailRows([
+  ['Position', job.title],
+  ['Department', dept],
+  ['Location', job.location],
+  ['Type', TYPE_LABEL[job.type] || job.type],
+  ['Experience', job.experience],
+  ['Salary', job.salaryRange],
+  ['Apply by', job.deadline ? formatIST(job.deadline, false) : ''],
+])}
+${summary ? `<p style="margin:0">${esc(summary)}</p>` : ''}
+${button(applyLink, 'View & apply')}`,
+    footerNote: `You get this because you signed up for job alerts. <a href="${esc(manageLink)}" style="color:${C.ocean}">Change departments or unsubscribe</a>.`,
+  });
+  const text = `New opening: ${job.title}\n${[dept, job.location, TYPE_LABEL[job.type]].filter(Boolean).join(' · ')}\n\n${summary}\n\nView & apply: ${applyLink}\n\nChange or unsubscribe: ${manageLink}${textFooter()}`;
+  return { subject, html, text };
+}
+
 // ---------------------------------------------------------------- HR email
 
 const SOURCE_LABEL = {
@@ -207,6 +332,7 @@ const SOURCE_LABEL = {
   facebook: 'Facebook',
   referral: 'Referral / other',
   google: 'Google search',
+  'job-alert': 'Job alert email',
 };
 const sourceLabel = (src) =>
   !src ? 'Careers site (direct)' : SOURCE_LABEL[String(src).toLowerCase()] || String(src).charAt(0).toUpperCase() + String(src).slice(1);
@@ -258,6 +384,10 @@ module.exports = {
   customMessage,
   hrNewApplication,
   testEmail,
+  documentRequest,
+  hrDocumentsSubmitted,
+  jobAlertConfirm,
+  jobAlert,
   esc,
   siteUrl,
 };
